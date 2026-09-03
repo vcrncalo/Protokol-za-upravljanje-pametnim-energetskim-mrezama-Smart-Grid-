@@ -11,7 +11,7 @@
 
 using boost::asio::ip::tcp;
 DeviceRegistry deviceRegistry; //globalni registar
-Database database("database/region1.db");
+Database database("database/region2.db");
 void acceptClient(
     tcp::acceptor& acceptor,
     boost::asio::io_context& io);
@@ -717,12 +717,12 @@ if (!database.initialize())
             io,
             tcp::endpoint(
                 tcp::v4(),
-                5001
+                5003
             )
         );
 
         std::cout
-            << "Asinhroni server slusa na portu 5001..."
+            << "Asinhroni server slusa na portu 5003..."
             << std::endl;
 
 	 acceptClient(acceptor, io);

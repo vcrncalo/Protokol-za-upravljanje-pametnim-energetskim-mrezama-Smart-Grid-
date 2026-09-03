@@ -14,6 +14,10 @@ int main()
         1,
         1
     );
+    database.printConsumptionByRegion();
+    database.printConsumptionHistory(
+    "smartgrid://sarajevo/meter/001"
+);
 
     return 0;
 }

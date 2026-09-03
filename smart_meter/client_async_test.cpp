@@ -9,6 +9,7 @@
 #include <chrono>
 #include <string>
 #include <random>
+#include <cmath>
 
 using boost::asio::ip::tcp;
 
@@ -24,13 +25,34 @@ int main(int argc, char* argv[])
     }
 
     std::string city = argv[1];
-    std::string meterId = argv[2];
+std::string meterId = argv[2];
 
-    std::string deviceUri =
-        "smartgrid://" + city + "/meter/" + meterId;
 
-    try
-    {
+// ==========================================
+// ODABIR REGIONALNOG SERVERA
+// ==========================================
+
+std::string port;
+
+if (city == "sarajevo")
+{
+    port = "5001";
+}
+else if (city == "mostar")
+{
+    port = "5003";
+}
+else
+{
+    port = "5001";
+}
+
+
+std::string deviceUri =
+    "smartgrid://" + city + "/meter/" + meterId;
+
+try
+{
         boost::asio::io_context io;
         tcp::socket socket(io);
 
@@ -39,7 +61,7 @@ int main(int argc, char* argv[])
         auto endpoints =
             resolver.resolve(
                 "127.0.0.1",
-                "5001"
+                port
             );
 
         boost::asio::connect(
@@ -68,8 +90,26 @@ int main(int argc, char* argv[])
             sizeof(request.device_uri) - 1
         ] = '\0';
 
-        request.region_id = 1;
-        request.user_type = 1;
+      
+
+if (city == "sarajevo")
+{
+    request.region_id = 1;
+}
+else if (city == "mostar")
+{
+    request.region_id = 2;
+}
+else if (city == "tuzla")
+{
+    request.region_id = 3;
+}
+else
+{
+    request.region_id = 0;
+}
+
+request.user_type = 1;
 
 
         std::vector<uint8_t> serialized =
@@ -207,10 +247,10 @@ int main(int argc, char* argv[])
 
 
                     report.consumption_kwh =
-                        consumptionDist(generator);
+    std::round(consumptionDist(generator) * 100.0) / 100.0;
 
-                    report.current_power_kw =
-                        powerDist(generator);
+report.current_power_kw =
+    std::round(powerDist(generator) * 100.0) / 100.0;
 
 
                     std::cout
