@@ -1,4 +1,4 @@
-# Protokol za upravljanje pametnim energetskim mrežama - Smart Grid
+# Protokol za upravljanje pametnim energetskim mrežama  Smart Grid
 
 Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
 
