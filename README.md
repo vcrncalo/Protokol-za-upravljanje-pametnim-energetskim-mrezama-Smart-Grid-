@@ -1,6 +1,6 @@
-# Smart Grid protokol
+# Protokol za upravljanje pametnim energetskim mrežama - Smart Grid
 
-Minimalistički opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
+Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
 
 ## Funkcionalnosti
 
@@ -16,7 +16,7 @@ Minimalistički opis projekta: dizajn i implementacija protokola za upravljanje 
 - Vođenje registra:
   - aktivnih mjernih uređaja,
   - tarifnih planova,
-  - istorije potrošnje i fakturisanja.
+  - historije potrošnje i fakturisanja.
 - Regionalni sistem sa najmanje dva odvojena servera (npr. Sarajevo i Mostar) uz sinhronizaciju podataka u realnom vremenu.
 - Alarmni sistem za neovlašten pristup ili neuobičajene vrijednosti potrošnje.
 - Sva signalizacija ide preko servera; direktna komunikacija između mjernih uređaja nije dozvoljena.
