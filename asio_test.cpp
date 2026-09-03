@@ -1,0 +1,12 @@
+#include <boost/asio.hpp>
+#include <iostream>
+
+int main()
+{
+    boost::asio::io_context io;
+
+    std::cout << "Boost.Asio radi!" << std::endl;
+
+    return 0;
+}
+
