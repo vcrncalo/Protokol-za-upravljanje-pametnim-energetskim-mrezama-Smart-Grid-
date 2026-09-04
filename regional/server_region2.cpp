@@ -482,246 +482,566 @@ else
 
                                 // Nakon ACK-a ponovo cekamo novi report
                                 if (reportCount + 1 < 5)
-{
-    readConsumptionReport(socket, reportCount + 1, userType);
-}
-else
-{
-    std::cout
-        << "Primljeno je 5 CONSUMPTION_REPORT poruka."
-        << std::endl;
+                                {
+                                    readConsumptionReport(
+                                        socket,
+                                        reportCount + 1,
+                                        userType
+                                    );
+                                }
+                                else
+                                {
+                                    std::cout
+                                        << "Primljeno je 5 CONSUMPTION_REPORT poruka."
+                                        << std::endl;
 
-    std::cout
-        << "Server je spreman da posalje REDUCE_CONSUMPTION_CMD."
-        << std::endl;
+                                    double networkLoadKw = totalNetworkLoadKw;
 
-double networkLoadKw = totalNetworkLoadKw;
+                                    // Pomocna lambda za slanje tarife.
+                                    // reductionSuccessful je true samo ako je
+                                    // novo mjerenje dokazalo da je snaga <= target.
+                                    auto sendTariff =
+                                        [socket, userType, networkLoadKw]
+                                        (bool reductionSuccessful)
+                                        {
+                                            TariffUpdate tariff{};
 
-ReduceConsumptionCommand command{};
+                                            tariff.price_per_kwh =
+                                                calculateDynamicTariff(
+                                                    userType,
+                                                    networkLoadKw,
+                                                    reductionSuccessful
+                                                );
 
-std::strncpy(
-    command.device_uri,
-    report.device_uri,
-    sizeof(command.device_uri) - 1
-);
+                                            database.insertTariff(
+                                                tariff.price_per_kwh
+                                            );
 
-command.device_uri[
-    sizeof(command.device_uri) - 1
-] = '\0';
+                                            auto serializedTariff =
+                                                std::make_shared<std::vector<uint8_t>>(
+                                                    serializeTariffUpdate(tariff)
+                                                );
 
-command.target_power_kw = 1.5;
-auto serializedCommand =
-    std::make_shared<std::vector<uint8_t>>(
-        serializeReduceConsumptionCommand(command)
-    );
-    boost::asio::async_write(
-    *socket,
-    boost::asio::buffer(*serializedCommand),
+                                            double sentPrice =
+                                                tariff.price_per_kwh;
 
-    [socket, serializedCommand, command, userType, networkLoadKw]
-    (
-        const boost::system::error_code& writeError,
-        std::size_t bytesTransferred
-    )
-    {
-        if (writeError)
-        {
-            std::cout
-                << "Greska pri slanju REDUCE_CONSUMPTION_CMD: "
-                << writeError.message()
-                << std::endl;
+                                            boost::asio::async_write(
+                                                *socket,
+                                                boost::asio::buffer(*serializedTariff),
+                                                [socket,
+                                                 serializedTariff,
+                                                 sentPrice]
+                                                (
+                                                    const boost::system::error_code& tariffError,
+                                                    std::size_t bytesTransferred
+                                                )
+                                                {
+                                                    if (tariffError)
+                                                    {
+                                                        std::cout
+                                                            << "Greska pri slanju TARIFF_UPDATE: "
+                                                            << tariffError.message()
+                                                            << std::endl;
+                                                        return;
+                                                    }
 
-            return;
-        }
+                                                    std::cout
+                                                        << "TARIFF_UPDATE poslan Smart Meteru."
+                                                        << std::endl;
 
-        std::cout
-            << "REDUCE_CONSUMPTION_CMD poslan."
-            << std::endl;
+                                                    std::cout
+                                                        << "Nova cijena: "
+                                                        << std::fixed << std::setprecision(2)
+                                                        << sentPrice
+                                                        << " KM/kWh"
+                                                        << std::endl;
 
-        std::cout
-            << "Poslano bajtova: "
-            << bytesTransferred
-            << std::endl;
-            auto commandAckHeader =
-    std::make_shared<std::vector<uint8_t>>(4);
+                                                    std::cout
+                                                        << "Poslano bajtova: "
+                                                        << bytesTransferred
+                                                        << std::endl;
+                                                }
+                                            );
+                                        };
 
-boost::asio::async_read(
-    *socket,
-    boost::asio::buffer(*commandAckHeader),
-    [socket, commandAckHeader, command, userType, networkLoadKw]
-    (
-        const boost::system::error_code& readError,
-        std::size_t
-    )
-    {
-        if (readError)
-        {
-            std::cout
-                << "Greska pri prijemu COMMAND_ACK headera: "
-                << readError.message()
-                << std::endl;
+                                    // REDUCE komandu saljemo samo tokom visokog
+                                    // regionalnog opterecenja.
+                                    if (networkLoadKw < 10.0)
+                                    {
+                                        std::cout
+                                            << "Opterecenje je ispod 10 kW - "
+                                            << "REDUCE_CONSUMPTION_CMD se ne salje."
+                                            << std::endl;
 
-            return;
-        }
+                                        sendTariff(false);
+                                        return;
+                                    }
 
-        uint16_t payloadLengthNetwork;
+                                    std::cout
+                                        << "Visoko opterecenje (>= 10 kW). "
+                                        << "Server salje REDUCE_CONSUMPTION_CMD."
+                                        << std::endl;
 
-        std::memcpy(
-            &payloadLengthNetwork,
-            commandAckHeader->data() + 2,
-            sizeof(payloadLengthNetwork)
-        );
+                                    ReduceConsumptionCommand command{};
 
-        uint16_t payloadLength =
-            ntohs(payloadLengthNetwork);
+                                    std::strncpy(
+                                        command.device_uri,
+                                        report.device_uri,
+                                        sizeof(command.device_uri) - 1
+                                    );
 
-        auto commandAckPayload =
-            std::make_shared<std::vector<uint8_t>>(
-                payloadLength
-            );
+                                    command.device_uri[
+                                        sizeof(command.device_uri) - 1
+                                    ] = '\0';
 
-        boost::asio::async_read(
-            *socket,
-            boost::asio::buffer(*commandAckPayload),
-            [socket, commandAckHeader, commandAckPayload, command, userType, networkLoadKw]
-            (
-                const boost::system::error_code& payloadError,
-                std::size_t
-            )
-            {
-                if (payloadError)
-                {
-                    std::cout
-                        << "Greska pri prijemu COMMAND_ACK payloada: "
-                        << payloadError.message()
-                        << std::endl;
+                                    command.target_power_kw = 1.5;
 
-                    return;
-                }
+                                    auto serializedCommand =
+                                        std::make_shared<std::vector<uint8_t>>(
+                                            serializeReduceConsumptionCommand(command)
+                                        );
 
-                std::vector<uint8_t> fullCommandAck;
+                                    boost::asio::async_write(
+                                        *socket,
+                                        boost::asio::buffer(*serializedCommand),
+                                        [socket,
+                                         serializedCommand,
+                                         command,
+                                         userType,
+                                         networkLoadKw,
+                                         sendTariff]
+                                        (
+                                            const boost::system::error_code& writeError,
+                                            std::size_t bytesTransferred
+                                        )
+                                        {
+                                            if (writeError)
+                                            {
+                                                std::cout
+                                                    << "Greska pri slanju REDUCE_CONSUMPTION_CMD: "
+                                                    << writeError.message()
+                                                    << std::endl;
+                                                return;
+                                            }
 
-                fullCommandAck.insert(
-                    fullCommandAck.end(),
-                    commandAckHeader->begin(),
-                    commandAckHeader->end()
-                );
+                                            std::cout
+                                                << "REDUCE_CONSUMPTION_CMD poslan."
+                                                << std::endl;
 
-                fullCommandAck.insert(
-                    fullCommandAck.end(),
-                    commandAckPayload->begin(),
-                    commandAckPayload->end()
-                );
+                                            std::cout
+                                                << "Poslano bajtova: "
+                                                << bytesTransferred
+                                                << std::endl;
 
-                if ((*commandAckHeader)[1] ==
-                    static_cast<uint8_t>(
-                        MessageType::COMMAND_ACK))
-                {
-                    CommandAck ack =
-                        deserializeCommandAck(
-                            fullCommandAck
-                        );
+                                            auto commandAckHeader =
+                                                std::make_shared<std::vector<uint8_t>>(4);
 
-                   if (ack.status == 1)
-{
-    std::cout
-        << "COMMAND_ACK primljen od Smart Metera."
-        << std::endl;
+                                            boost::asio::async_read(
+                                                *socket,
+                                                boost::asio::buffer(*commandAckHeader),
+                                                [socket,
+                                                 commandAckHeader,
+                                                 command,
+                                                 userType,
+                                                 networkLoadKw,
+                                                 sendTariff]
+                                                (
+                                                    const boost::system::error_code& readError,
+                                                    std::size_t
+                                                )
+                                                {
+                                                    if (readError)
+                                                    {
+                                                        std::cout
+                                                            << "Greska pri prijemu COMMAND_ACK headera: "
+                                                            << readError.message()
+                                                            << std::endl;
+                                                        return;
+                                                    }
 
-    std::cout
-        << "Komanda je uspjesno prihvacena."
-        << std::endl;
-        database.insertCommand(
-    command.device_uri,
-    "REDUCE_CONSUMPTION",
-    command.target_power_kw,
-    "ACCEPTED"
-);
+                                                    uint16_t payloadLengthNetwork;
 
+                                                    std::memcpy(
+                                                        &payloadLengthNetwork,
+                                                        commandAckHeader->data() + 2,
+                                                        sizeof(payloadLengthNetwork)
+                                                    );
 
-    // ==========================================
-    // TARIFF_UPDATE
-    // ==========================================
+                                                    uint16_t payloadLength =
+                                                        ntohs(payloadLengthNetwork);
 
-    TariffUpdate tariff{};
+                                                    auto commandAckPayload =
+                                                        std::make_shared<std::vector<uint8_t>>(
+                                                            payloadLength
+                                                        );
 
-    tariff.price_per_kwh =
-        calculateDynamicTariff(
-            userType,
-            networkLoadKw,
-            true
-        );
+                                                    boost::asio::async_read(
+                                                        *socket,
+                                                        boost::asio::buffer(*commandAckPayload),
+                                                        [socket,
+                                                         commandAckHeader,
+                                                         commandAckPayload,
+                                                         command,
+                                                         userType,
+                                                         networkLoadKw,
+                                                         sendTariff]
+                                                        (
+                                                            const boost::system::error_code& payloadError,
+                                                            std::size_t
+                                                        )
+                                                        {
+                                                            if (payloadError)
+                                                            {
+                                                                std::cout
+                                                                    << "Greska pri prijemu COMMAND_ACK payloada: "
+                                                                    << payloadError.message()
+                                                                    << std::endl;
+                                                                return;
+                                                            }
 
-    database.insertTariff(
-        tariff.price_per_kwh
-    );
+                                                            std::vector<uint8_t> fullCommandAck;
 
-   
+                                                            fullCommandAck.insert(
+                                                                fullCommandAck.end(),
+                                                                commandAckHeader->begin(),
+                                                                commandAckHeader->end()
+                                                            );
 
-    auto serializedTariff =
-        std::make_shared<std::vector<uint8_t>>(
-            serializeTariffUpdate(tariff)
-        );
+                                                            fullCommandAck.insert(
+                                                                fullCommandAck.end(),
+                                                                commandAckPayload->begin(),
+                                                                commandAckPayload->end()
+                                                            );
 
-    double sentPrice = tariff.price_per_kwh;
+                                                            if ((*commandAckHeader)[1] !=
+                                                                static_cast<uint8_t>(
+                                                                    MessageType::COMMAND_ACK))
+                                                            {
+                                                                std::cout
+                                                                    << "Primljena poruka nije COMMAND_ACK."
+                                                                    << std::endl;
+                                                                return;
+                                                            }
 
-    boost::asio::async_write(
-        *socket,
-        boost::asio::buffer(*serializedTariff),
-        [socket, serializedTariff, sentPrice]
-        (
-            const boost::system::error_code& tariffError,
-            std::size_t bytesTransferred
-        )
-        {
-            if (tariffError)
-            {
-                std::cout
-                    << "Greska pri slanju TARIFF_UPDATE: "
-                    << tariffError.message()
-                    << std::endl;
+                                                            CommandAck ack =
+                                                                deserializeCommandAck(
+                                                                    fullCommandAck
+                                                                );
 
-                return;
-            }
+                                                            if (ack.status != 1)
+                                                            {
+                                                                std::cout
+                                                                    << "Smart Meter nije prihvatio komandu."
+                                                                    << std::endl;
 
-            std::cout
-                << "TARIFF_UPDATE poslan Smart Meteru."
-                << std::endl;
+                                                                database.insertCommand(
+                                                                    command.device_uri,
+                                                                    "REDUCE_CONSUMPTION",
+                                                                    command.target_power_kw,
+                                                                    "REJECTED"
+                                                                );
 
-            std::cout
-                << "Nova cijena: "
-                << std::fixed << std::setprecision(2)
-                << sentPrice
-                << " KM/kWh"
-                << std::endl;
+                                                                sendTariff(false);
+                                                                return;
+                                                            }
 
-            std::cout
-                << "Poslano bajtova: "
-                << bytesTransferred
-                << std::endl;
-        }
-    );
-}
-                    else
-                    {
-                        std::cout
-                            << "Smart Meter nije prihvatio komandu."
-                            << std::endl;
-                    }
-                }
-                else
-                {
-                    std::cout
-                        << "Primljena poruka nije COMMAND_ACK."
-                        << std::endl;
-                }
-            }
-        );
-    }
-);
-    }
-);
-}
+                                                            std::cout
+                                                                << "COMMAND_ACK primljen od Smart Metera."
+                                                                << std::endl;
+
+                                                            std::cout
+                                                                << "Komanda je prihvacena. "
+                                                                << "Ceka se mjerenje nakon smanjenja."
+                                                                << std::endl;
+
+                                                            database.insertCommand(
+                                                                command.device_uri,
+                                                                "REDUCE_CONSUMPTION",
+                                                                command.target_power_kw,
+                                                                "ACCEPTED"
+                                                            );
+
+                                                            // ==========================================
+                                                            // NOVO MJERENJE NAKON REDUCE KOMANDE
+                                                            // ==========================================
+
+                                                            auto reducedHeader =
+                                                                std::make_shared<std::vector<uint8_t>>(4);
+
+                                                            boost::asio::async_read(
+                                                                *socket,
+                                                                boost::asio::buffer(*reducedHeader),
+                                                                [socket,
+                                                                 reducedHeader,
+                                                                 command,
+                                                                 userType,
+                                                                 networkLoadKw,
+                                                                 sendTariff]
+                                                                (
+                                                                    const boost::system::error_code& reducedHeaderError,
+                                                                    std::size_t
+                                                                )
+                                                                {
+                                                                    if (reducedHeaderError)
+                                                                    {
+                                                                        std::cout
+                                                                            << "Greska pri prijemu mjerenja nakon REDUCE komande: "
+                                                                            << reducedHeaderError.message()
+                                                                            << std::endl;
+                                                                        return;
+                                                                    }
+
+                                                                    uint16_t reducedPayloadLengthNetwork;
+
+                                                                    std::memcpy(
+                                                                        &reducedPayloadLengthNetwork,
+                                                                        reducedHeader->data() + 2,
+                                                                        sizeof(reducedPayloadLengthNetwork)
+                                                                    );
+
+                                                                    uint16_t reducedPayloadLength =
+                                                                        ntohs(reducedPayloadLengthNetwork);
+
+                                                                    auto reducedPayload =
+                                                                        std::make_shared<std::vector<uint8_t>>(
+                                                                            reducedPayloadLength
+                                                                        );
+
+                                                                    boost::asio::async_read(
+                                                                        *socket,
+                                                                        boost::asio::buffer(*reducedPayload),
+                                                                        [socket,
+                                                                         reducedHeader,
+                                                                         reducedPayload,
+                                                                         command,
+                                                                         userType,
+                                                                         networkLoadKw,
+                                                                         sendTariff]
+                                                                        (
+                                                                            const boost::system::error_code& reducedPayloadError,
+                                                                            std::size_t
+                                                                        )
+                                                                        {
+                                                                            if (reducedPayloadError)
+                                                                            {
+                                                                                std::cout
+                                                                                    << "Greska pri prijemu payload-a mjerenja nakon REDUCE komande: "
+                                                                                    << reducedPayloadError.message()
+                                                                                    << std::endl;
+                                                                                return;
+                                                                            }
+
+                                                                            std::vector<uint8_t> fullReducedMessage;
+
+                                                                            fullReducedMessage.insert(
+                                                                                fullReducedMessage.end(),
+                                                                                reducedHeader->begin(),
+                                                                                reducedHeader->end()
+                                                                            );
+
+                                                                            fullReducedMessage.insert(
+                                                                                fullReducedMessage.end(),
+                                                                                reducedPayload->begin(),
+                                                                                reducedPayload->end()
+                                                                            );
+
+                                                                            if ((*reducedHeader)[1] !=
+                                                                                static_cast<uint8_t>(
+                                                                                    MessageType::CONSUMPTION_REPORT))
+                                                                            {
+                                                                                std::cout
+                                                                                    << "Ocekivan CONSUMPTION_REPORT nakon REDUCE komande."
+                                                                                    << std::endl;
+                                                                                return;
+                                                                            }
+
+                                                                            ConsumptionReport reducedReport =
+                                                                                deserializeConsumptionReport(
+                                                                                    fullReducedMessage
+                                                                                );
+
+                                                                            bool sameDevice =
+                                                                                std::strncmp(
+                                                                                    reducedReport.device_uri,
+                                                                                    command.device_uri,
+                                                                                    sizeof(command.device_uri)
+                                                                                ) == 0;
+
+                                                                            bool reductionSuccessful =
+                                                                                sameDevice &&
+                                                                                reducedReport.current_power_kw <=
+                                                                                    command.target_power_kw;
+
+                                                                            std::cout
+                                                                                << "\n=== PROVJERA SMANJENJA POTROSNJE ==="
+                                                                                << std::endl;
+
+                                                                            std::cout
+                                                                                << "URI: "
+                                                                                << reducedReport.device_uri
+                                                                                << std::endl;
+
+                                                                            std::cout
+                                                                                << "Zadata maksimalna snaga: "
+                                                                                << command.target_power_kw
+                                                                                << " kW"
+                                                                                << std::endl;
+
+                                                                            std::cout
+                                                                                << "Izmjerena snaga nakon komande: "
+                                                                                << reducedReport.current_power_kw
+                                                                                << " kW"
+                                                                                << std::endl;
+
+                                                                            std::cout
+                                                                                << "Rezultat: "
+                                                                                << (reductionSuccessful
+                                                                                    ? "SMANJENJE USPJESNO"
+                                                                                    : "SMANJENJE NIJE USPJESNO")
+                                                                                << std::endl;
+
+                                                                            std::cout
+                                                                                << "====================================="
+                                                                                << std::endl;
+
+                                                                            updateAndGetTotalNetworkLoad(
+                                                                                reducedReport.device_uri,
+                                                                                reducedReport.current_power_kw
+                                                                            );
+
+                                                                            database.insertConsumption(
+                                                                                reducedReport.device_uri,
+                                                                                reducedReport.timestamp,
+                                                                                reducedReport.consumption_kwh,
+                                                                                reducedReport.current_power_kw
+                                                                            );
+
+                                                                            // Novo mjerenje prosljedjujemo centralnom serveru.
+                                                                            if (centralSocket &&
+                                                                                centralSocket->is_open())
+                                                                            {
+                                                                                try
+                                                                                {
+                                                                                    std::lock_guard<std::mutex>
+                                                                                        centralLock(centralSyncMutex);
+
+                                                                                    RegionSync sync{};
+
+                                                                                    sync.source_region = 2;
+
+                                                                                    std::strncpy(
+                                                                                        sync.device_uri,
+                                                                                        reducedReport.device_uri,
+                                                                                        sizeof(sync.device_uri) - 1
+                                                                                    );
+
+                                                                                    sync.device_uri[
+                                                                                        sizeof(sync.device_uri) - 1
+                                                                                    ] = '\0';
+
+                                                                                    sync.timestamp =
+                                                                                        reducedReport.timestamp;
+
+                                                                                    sync.consumption_kwh =
+                                                                                        reducedReport.consumption_kwh;
+
+                                                                                    sync.current_power_kw =
+                                                                                        reducedReport.current_power_kw;
+
+                                                                                    std::vector<uint8_t> syncData =
+                                                                                        serializeRegionSync(sync);
+
+                                                                                    boost::asio::write(
+                                                                                        *centralSocket,
+                                                                                        boost::asio::buffer(syncData)
+                                                                                    );
+
+                                                                                    std::vector<uint8_t> ackBuffer(5);
+
+                                                                                    boost::asio::read(
+                                                                                        *centralSocket,
+                                                                                        boost::asio::buffer(ackBuffer)
+                                                                                    );
+
+                                                                                    if (ackBuffer[0] == 1 &&
+                                                                                        ackBuffer[1] ==
+                                                                                            static_cast<uint8_t>(
+                                                                                                MessageType::REGION_SYNC_ACK) &&
+                                                                                        ackBuffer[4] == 1)
+                                                                                    {
+                                                                                        std::cout
+                                                                                            << "Centralni server potvrdio novo mjerenje nakon REDUCE komande."
+                                                                                            << std::endl;
+                                                                                    }
+                                                                                    else
+                                                                                    {
+                                                                                        std::cout
+                                                                                            << "Neispravan REGION_SYNC_ACK za mjerenje nakon REDUCE komande."
+                                                                                            << std::endl;
+                                                                                    }
+                                                                                }
+                                                                                catch (const std::exception& e)
+                                                                                {
+                                                                                    std::cout
+                                                                                        << "Greska pri REGION_SYNC nakon REDUCE komande: "
+                                                                                        << e.what()
+                                                                                        << std::endl;
+                                                                                }
+                                                                            }
+
+                                                                            ConsumptionAck reducedAck{};
+                                                                            reducedAck.status = 1;
+
+                                                                            auto serializedReducedAck =
+                                                                                std::make_shared<std::vector<uint8_t>>(
+                                                                                    serializeConsumptionAck(
+                                                                                        reducedAck
+                                                                                    )
+                                                                                );
+
+                                                                            boost::asio::async_write(
+                                                                                *socket,
+                                                                                boost::asio::buffer(
+                                                                                    *serializedReducedAck
+                                                                                ),
+                                                                                [socket,
+                                                                                 serializedReducedAck,
+                                                                                 reductionSuccessful,
+                                                                                 sendTariff]
+                                                                                (
+                                                                                    const boost::system::error_code& reducedAckError,
+                                                                                    std::size_t
+                                                                                )
+                                                                                {
+                                                                                    if (reducedAckError)
+                                                                                    {
+                                                                                        std::cout
+                                                                                            << "Greska pri slanju CONSUMPTION_ACK nakon REDUCE komande: "
+                                                                                            << reducedAckError.message()
+                                                                                            << std::endl;
+                                                                                        return;
+                                                                                    }
+
+                                                                                    std::cout
+                                                                                        << "CONSUMPTION_ACK za mjerenje nakon REDUCE komande poslan."
+                                                                                        << std::endl;
+
+                                                                                    sendTariff(
+                                                                                        reductionSuccessful
+                                                                                    );
+                                                                                }
+                                                                            );
+                                                                        }
+                                                                    );
+                                                                }
+                                                            );
+                                                        }
+                                                    );
+                                                }
+                                            );
+                                        }
+                                    );
+                                }
                             }
                         );
                     }

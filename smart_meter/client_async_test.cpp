@@ -536,6 +536,175 @@ report.current_power_kw =
                     std::cout
                         << "COMMAND_ACK poslan serveru."
                         << std::endl;
+
+
+                    // ==========================================
+                    // POTVRDA STVARNOG SMANJENJA POTROSNJE
+                    // ==========================================
+                    //
+                    // COMMAND_ACK potvrđuje samo da je Smart Meter
+                    // prihvatio komandu. Sada saljemo novo mjerenje
+                    // sa snagom koja je manja ili jednaka zadatom
+                    // target_power_kw, kako bi server mogao provjeriti
+                    // da je smanjenje stvarno izvrseno.
+
+                    ConsumptionReport reducedReport{};
+
+                    std::strncpy(
+                        reducedReport.device_uri,
+                        deviceUri.c_str(),
+                        sizeof(reducedReport.device_uri) - 1
+                    );
+
+                    reducedReport.device_uri[
+                        sizeof(reducedReport.device_uri) - 1
+                    ] = '\0';
+
+                    reducedReport.timestamp =
+                        static_cast<uint64_t>(
+                            std::time(nullptr)
+                        );
+
+                    // Simulacija potrosnje nakon prihvacene REDUCE komande.
+                    // Snaga je nasumicno izabrana iz sigurnog raspona
+                    // ispod zadate maksimalne snage.
+                    double reducedUpperPower =
+                        std::max(0.1, command.target_power_kw * 0.95);
+
+                    std::uniform_real_distribution<double>
+                        reducedPowerDist(
+                            0.1,
+                            reducedUpperPower
+                        );
+
+                    reducedReport.current_power_kw =
+                        std::round(
+                            reducedPowerDist(generator) * 100.0
+                        ) / 100.0;
+
+                    // Za demonstraciju generisemo i novo intervalno
+                    // mjerenje energije nakon smanjenja.
+                    std::uniform_real_distribution<double>
+                        reducedConsumptionDist(
+                            0.1,
+                            request.user_type == 1 ? 1.0 : 2.0
+                        );
+
+                    reducedReport.consumption_kwh =
+                        std::round(
+                            reducedConsumptionDist(generator) * 100.0
+                        ) / 100.0;
+
+                    std::vector<uint8_t> serializedReducedReport =
+                        serializeConsumptionReport(
+                            reducedReport
+                        );
+
+                    boost::asio::write(
+                        socket,
+                        boost::asio::buffer(
+                            serializedReducedReport
+                        )
+                    );
+
+                    std::cout
+                        << "NOVI CONSUMPTION_REPORT nakon REDUCE komande poslan."
+                        << std::endl;
+
+                    std::cout
+                        << "Snaga nakon smanjenja: "
+                        << reducedReport.current_power_kw
+                        << " kW (cilj <= "
+                        << command.target_power_kw
+                        << " kW)"
+                        << std::endl;
+
+
+                    // ==========================================
+                    // CEKANJE CONSUMPTION_ACK ZA NOVO MJERENJE
+                    // ==========================================
+
+                    std::vector<uint8_t>
+                        reducedAckHeader(4);
+
+                    boost::asio::read(
+                        socket,
+                        boost::asio::buffer(
+                            reducedAckHeader
+                        )
+                    );
+
+                    uint16_t
+                        reducedAckPayloadLengthNetwork;
+
+                    std::memcpy(
+                        &reducedAckPayloadLengthNetwork,
+                        reducedAckHeader.data() + 2,
+                        sizeof(
+                            reducedAckPayloadLengthNetwork
+                        )
+                    );
+
+                    uint16_t reducedAckPayloadLength =
+                        ntohs(
+                            reducedAckPayloadLengthNetwork
+                        );
+
+                    std::vector<uint8_t>
+                        reducedAckPayload(
+                            reducedAckPayloadLength
+                        );
+
+                    boost::asio::read(
+                        socket,
+                        boost::asio::buffer(
+                            reducedAckPayload
+                        )
+                    );
+
+                    std::vector<uint8_t>
+                        fullReducedAck;
+
+                    fullReducedAck.insert(
+                        fullReducedAck.end(),
+                        reducedAckHeader.begin(),
+                        reducedAckHeader.end()
+                    );
+
+                    fullReducedAck.insert(
+                        fullReducedAck.end(),
+                        reducedAckPayload.begin(),
+                        reducedAckPayload.end()
+                    );
+
+                    if (reducedAckHeader[1] ==
+                        static_cast<uint8_t>(
+                            MessageType::CONSUMPTION_ACK))
+                    {
+                        ConsumptionAck reducedAck =
+                            deserializeConsumptionAck(
+                                fullReducedAck
+                            );
+
+                        if (reducedAck.status == 1)
+                        {
+                            std::cout
+                                << "CONSUMPTION_ACK za smanjenu potrosnju primljen."
+                                << std::endl;
+                        }
+                        else
+                        {
+                            std::cout
+                                << "Server nije prihvatio mjerenje nakon smanjenja."
+                                << std::endl;
+                        }
+                    }
+                    else
+                    {
+                        std::cout
+                            << "Ocekivan CONSUMPTION_ACK nakon smanjenja."
+                            << std::endl;
+                    }
                         // ==========================================
 // CEKANJE TARIFF_UPDATE PORUKE
 // ==========================================
