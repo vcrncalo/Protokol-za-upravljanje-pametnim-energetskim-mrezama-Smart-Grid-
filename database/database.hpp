@@ -132,7 +132,7 @@ public:
                     REFERENCES devices(uri)
             );
 
-            CREATE TABLE IF NOT EXISTS region_sync (
+                       CREATE TABLE IF NOT EXISTS region_sync (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_region INTEGER NOT NULL,
                 target_region INTEGER NOT NULL,
@@ -141,6 +141,14 @@ public:
                 timestamp TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS central_consumption (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_region INTEGER NOT NULL,
+                device_uri TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                consumption_kwh REAL NOT NULL,
+                current_power_kw REAL NOT NULL
+            );
         )";
 
         char* errorMessage = nullptr;
@@ -438,7 +446,188 @@ public:
 
         return true;
     }
+    
+       // ==========================================
+    // UPIS POTROSNJE U CENTRALNU BAZU
+    // ==========================================
 
+    void insertCentralConsumption(
+        uint32_t source_region,
+        const std::string& device_uri,
+        uint64_t timestamp,
+        double consumption_kwh,
+        double current_power_kw)
+    {
+        const char* sql =
+            "INSERT INTO central_consumption "
+            "(source_region, device_uri, timestamp, "
+            "consumption_kwh, current_power_kw) "
+            "VALUES (?, ?, ?, ?, ?);";
+
+        sqlite3_stmt* stmt = nullptr;
+
+        if (sqlite3_prepare_v2(
+                db,
+                sql,
+                -1,
+                &stmt,
+                nullptr) != SQLITE_OK)
+        {
+            std::cerr
+                << "Greska pri pripremi centralnog upisa: "
+                << sqlite3_errmsg(db)
+                << std::endl;
+
+            return;
+        }
+
+        sqlite3_bind_int(
+            stmt,
+            1,
+            static_cast<int>(source_region)
+        );
+
+        sqlite3_bind_text(
+            stmt,
+            2,
+            device_uri.c_str(),
+            -1,
+            SQLITE_TRANSIENT
+        );
+
+        sqlite3_bind_int64(
+            stmt,
+            3,
+            static_cast<sqlite3_int64>(timestamp)
+        );
+
+        sqlite3_bind_double(
+            stmt,
+            4,
+            consumption_kwh
+        );
+
+        sqlite3_bind_double(
+            stmt,
+            5,
+            current_power_kw
+        );
+
+        int result = sqlite3_step(stmt);
+
+        if (result != SQLITE_DONE)
+        {
+            std::cerr
+                << "Greska pri upisu u centralnu bazu: "
+                << sqlite3_errmsg(db)
+                << std::endl;
+        }
+        else
+        {
+            std::cout
+                << "Mjerenje upisano u centralnu bazu za regiju "
+                << source_region
+                << std::endl;
+        }
+
+        sqlite3_finalize(stmt);
+    }
+
+
+    // ==========================================
+    // AGREGACIJA CENTRALNE POTROSNJE PO REGIJAMA
+    // ==========================================
+
+    void printCentralAggregation()
+    {
+        const char* sql =
+            "SELECT "
+            "source_region, "
+            "COUNT(*) AS broj_mjerenja, "
+            "SUM(consumption_kwh) AS ukupna_potrosnja, "
+            "AVG(consumption_kwh) AS prosjecna_potrosnja, "
+            "AVG(current_power_kw) AS prosjecna_snaga "
+            "FROM central_consumption "
+            "GROUP BY source_region "
+            "ORDER BY source_region;";
+
+        sqlite3_stmt* stmt = nullptr;
+
+        if (sqlite3_prepare_v2(
+                db,
+                sql,
+                -1,
+                &stmt,
+                nullptr) != SQLITE_OK)
+        {
+            std::cerr
+                << "Greska pri agregaciji centralnih podataka: "
+                << sqlite3_errmsg(db)
+                << std::endl;
+
+            return;
+        }
+
+        std::cout
+            << "\n=== AGREGACIJA PO REGIJAMA ==="
+            << std::endl;
+
+        while (sqlite3_step(stmt) == SQLITE_ROW)
+        {
+            int region =
+                sqlite3_column_int(stmt, 0);
+
+            int brojMjerenja =
+                sqlite3_column_int(stmt, 1);
+
+            double ukupnaPotrosnja =
+                sqlite3_column_double(stmt, 2);
+
+            double prosjecnaPotrosnja =
+                sqlite3_column_double(stmt, 3);
+
+            double prosjecnaSnaga =
+                sqlite3_column_double(stmt, 4);
+
+            std::cout
+                << "\nRegija: "
+                << region
+                << std::endl;
+
+            std::cout
+                << "Broj mjerenja: "
+                << brojMjerenja
+                << std::endl;
+
+            std::cout
+                << "Ukupna potrosnja: "
+                << ukupnaPotrosnja
+                << " kWh"
+                << std::endl;
+
+            std::cout
+                << "Prosjecna potrosnja: "
+                << prosjecnaPotrosnja
+                << " kWh"
+                << std::endl;
+
+            std::cout
+                << "Prosjecna snaga: "
+                << prosjecnaSnaga
+                << " kW"
+                << std::endl;
+
+            std::cout
+                << "------------------------"
+                << std::endl;
+        }
+
+        sqlite3_finalize(stmt);
+
+        std::cout
+            << "================================\n"
+            << std::endl;
+    }
 
     // ==========================================
     // UPIS KOMANDE

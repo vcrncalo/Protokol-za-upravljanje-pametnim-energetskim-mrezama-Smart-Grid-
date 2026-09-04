@@ -77,6 +77,19 @@ struct TariffUpdate
 {
     double price_per_kwh;
 };
+struct RegionSync
+{
+    uint32_t source_region;
+    char device_uri[64];
+    uint64_t timestamp;
+    double consumption_kwh;
+    double current_power_kw;
+};
+
+struct RegionSyncAck
+{
+    uint8_t status;
+};
 
 inline std::vector<uint8_t> serializeHeartbeat(
     const Heartbeat& heartbeat)
@@ -336,6 +349,122 @@ inline std::vector<uint8_t> serializeConsumptionReport(
     );
 
     return buffer;
+}
+std::vector<uint8_t> serializeRegionSync(const RegionSync& sync)
+{
+    std::vector<uint8_t> buffer;
+
+    MessageHeader header;
+    header.version = 1;
+    header.type = static_cast<uint8_t>(MessageType::REGION_SYNC);
+    header.payload_length =
+        sizeof(sync.source_region) +
+        sizeof(sync.device_uri) +
+        sizeof(sync.timestamp) +
+        sizeof(sync.consumption_kwh) +
+        sizeof(sync.current_power_kw);
+
+    buffer.push_back(header.version);
+    buffer.push_back(header.type);
+
+    uint16_t payloadLengthNetwork = htons(header.payload_length);
+    uint8_t* lengthBytes =
+        reinterpret_cast<uint8_t*>(&payloadLengthNetwork);
+
+    buffer.insert(buffer.end(), lengthBytes, lengthBytes + sizeof(uint16_t));
+
+    uint32_t regionNetwork = htonl(sync.source_region);
+    uint8_t* regionBytes =
+        reinterpret_cast<uint8_t*>(&regionNetwork);
+
+    buffer.insert(buffer.end(), regionBytes, regionBytes + sizeof(uint32_t));
+
+    buffer.insert(
+        buffer.end(),
+        sync.device_uri,
+        sync.device_uri + sizeof(sync.device_uri)
+    );
+
+    uint64_t timestampNetwork = htobe64(sync.timestamp);
+    uint8_t* timestampBytes =
+        reinterpret_cast<uint8_t*>(&timestampNetwork);
+
+    buffer.insert(
+        buffer.end(),
+        timestampBytes,
+        timestampBytes + sizeof(uint64_t)
+    );
+
+    const uint8_t* consumptionBytes =
+        reinterpret_cast<const uint8_t*>(&sync.consumption_kwh);
+
+    buffer.insert(
+        buffer.end(),
+        consumptionBytes,
+        consumptionBytes + sizeof(double)
+    );
+
+    const uint8_t* powerBytes =
+        reinterpret_cast<const uint8_t*>(&sync.current_power_kw);
+
+    buffer.insert(
+        buffer.end(),
+        powerBytes,
+        powerBytes + sizeof(double)
+    );
+
+    return buffer;
+}
+RegionSync deserializeRegionSync(const std::vector<uint8_t>& buffer)
+{
+    RegionSync sync{};
+
+    std::size_t offset = 4; // preskacemo MessageHeader
+
+    // source_region
+    uint32_t regionNetwork;
+    std::memcpy(
+        &regionNetwork,
+        buffer.data() + offset,
+        sizeof(uint32_t)
+    );
+    sync.source_region = ntohl(regionNetwork);
+    offset += sizeof(uint32_t);
+
+    // device_uri
+    std::memcpy(
+        sync.device_uri,
+        buffer.data() + offset,
+        sizeof(sync.device_uri)
+    );
+    offset += sizeof(sync.device_uri);
+
+    // timestamp
+    uint64_t timestampNetwork;
+    std::memcpy(
+        &timestampNetwork,
+        buffer.data() + offset,
+        sizeof(uint64_t)
+    );
+    sync.timestamp = be64toh(timestampNetwork);
+    offset += sizeof(uint64_t);
+
+    // consumption_kwh
+    std::memcpy(
+        &sync.consumption_kwh,
+        buffer.data() + offset,
+        sizeof(double)
+    );
+    offset += sizeof(double);
+
+    // current_power_kw
+    std::memcpy(
+        &sync.current_power_kw,
+        buffer.data() + offset,
+        sizeof(double)
+    );
+
+    return sync;
 }
 
 std::vector<uint8_t> serializeReduceConsumptionCommand(
@@ -601,5 +730,33 @@ TariffUpdate deserializeTariffUpdate(
     );
 
     return tariff;
+}
+std::vector<uint8_t> serializeRegionSyncAck(
+    const RegionSyncAck& ack)
+{
+    MessageHeader header{};
+
+    header.version = 1;
+    header.type =
+        static_cast<uint8_t>(MessageType::REGION_SYNC_ACK);
+    header.payload_length =
+        htons(sizeof(uint8_t));
+
+    std::vector<uint8_t> buffer(
+        4 + sizeof(uint8_t)
+    );
+
+    buffer[0] = header.version;
+    buffer[1] = header.type;
+
+    std::memcpy(
+        buffer.data() + 2,
+        &header.payload_length,
+        sizeof(uint16_t)
+    );
+
+    buffer[4] = ack.status;
+
+    return buffer;
 }
 #endif

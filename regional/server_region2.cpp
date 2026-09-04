@@ -10,6 +10,7 @@
 #include "../database/database.hpp"
 
 using boost::asio::ip::tcp;
+std::shared_ptr<tcp::socket> centralSocket;
 DeviceRegistry deviceRegistry; //globalni registar
 Database database("database/region2.db");
 void acceptClient(
@@ -189,6 +190,63 @@ database.insertConsumption(
     report.consumption_kwh,
     report.current_power_kw
 );
+// Slanje mjerenja centralnom serveru u realnom vremenu
+if (centralSocket && centralSocket->is_open())
+{
+    RegionSync sync{};
+
+    sync.source_region = 2;
+
+    std::strncpy(
+        sync.device_uri,
+        report.device_uri,
+        sizeof(sync.device_uri) - 1
+    );
+
+    sync.timestamp = report.timestamp;
+    sync.consumption_kwh = report.consumption_kwh;
+    sync.current_power_kw = report.current_power_kw;
+
+    std::vector<uint8_t> syncData =
+        serializeRegionSync(sync);
+
+    boost::asio::write(
+        *centralSocket,
+        boost::asio::buffer(syncData)
+    );
+    std::vector<uint8_t> ackBuffer(5);
+
+boost::asio::read(
+    *centralSocket,
+    boost::asio::buffer(ackBuffer)
+);
+
+uint8_t ackVersion = ackBuffer[0];
+uint8_t ackType = ackBuffer[1];
+uint8_t ackStatus = ackBuffer[4];
+
+if (ackVersion == 1 &&
+    ackType ==
+        static_cast<uint8_t>(
+            MessageType::REGION_SYNC_ACK
+        ) &&
+    ackStatus == 1)
+{
+    std::cout
+        << "Centralni server potvrdio REGION_SYNC."
+        << std::endl;
+}
+else
+{
+    std::cout
+        << "Neispravan REGION_SYNC_ACK."
+        << std::endl;
+}
+
+    std::cout
+        << "Mjerenje proslijedjeno centralnom serveru."
+        << std::endl;
+}
 
                         // Kreiramo CONSUMPTION_ACK
                         ConsumptionAck consumptionAck{};
@@ -698,9 +756,35 @@ void acceptClient(
         }
     );
 }
+void connectToCentralServer()
+{
+    try
+    {
+        static boost::asio::io_context centralIoContext;
+
+        tcp::resolver resolver(centralIoContext);
+        auto endpoints = resolver.resolve("127.0.0.1", "6000");
+
+        centralSocket = std::make_shared<tcp::socket>(centralIoContext);
+
+        boost::asio::connect(*centralSocket, endpoints);
+
+        std::cout
+            << "Regionalni server 2 povezan sa centralnim serverom."
+            << std::endl;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr
+            << "Greska pri povezivanju sa centralnim serverom: "
+            << e.what()
+            << std::endl;
+    }
+}
 
 int main()
 {
+connectToCentralServer();
 if (!database.initialize())
 {
     std::cerr
