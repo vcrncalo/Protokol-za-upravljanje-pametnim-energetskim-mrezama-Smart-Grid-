@@ -15,17 +15,23 @@ using boost::asio::ip::tcp;
 
 int main(int argc, char* argv[])
 {
-    if (argc < 3)
-    {
-        std::cout
-            << "Koristenje: ./client_async_test <grad> <meter_id>"
-            << std::endl;
+    if (argc < 4)
+{
+    std::cout
+        << "Koristenje: ./client_async_test "
+        << "<grad> <meter_id> <tip_korisnika>"
+        << std::endl;
 
-        return 1;
-    }
+    std::cout
+        << "Tip korisnika: domacinstvo ili industrija"
+        << std::endl;
 
-    std::string city = argv[1];
+    return 1;
+}
+
+std::string city = argv[1];
 std::string meterId = argv[2];
+std::string userType = argv[3];
 
 
 // ==========================================
@@ -109,7 +115,31 @@ else
     request.region_id = 0;
 }
 
-request.user_type = 1;
+if (userType == "domacinstvo")
+{
+    request.user_type = 1;
+
+    std::cout
+        << "Tip korisnika: DOMACINSTVO"
+        << std::endl;
+}
+else if (userType == "industrija")
+{
+    request.user_type = 2;
+
+    std::cout
+        << "Tip korisnika: INDUSTRIJSKI"
+        << std::endl;
+}
+else
+{
+    std::cerr
+        << "Nepoznat tip korisnika. "
+        << "Koristi domacinstvo ili industrija."
+        << std::endl;
+
+    return 1;
+}
 
 
         std::vector<uint8_t> serialized =
@@ -213,11 +243,15 @@ request.user_type = 1;
                 std::random_device rd;
                 std::mt19937 generator(rd());
 
-                std::uniform_real_distribution<double>
-                    consumptionDist(1.5, 5.0);
+                std::uniform_real_distribution<double> consumptionDist(
+    request.user_type == 1 ? 1.5 : 8.0,
+    request.user_type == 1 ? 5.0 : 20.0
+);
 
-                std::uniform_real_distribution<double>
-                    powerDist(0.5, 3.0);
+std::uniform_real_distribution<double> powerDist(
+    request.user_type == 1 ? 0.5 : 5.0,
+    request.user_type == 1 ? 3.0 : 15.0
+);
 
 
                 // ==========================================

@@ -4,6 +4,12 @@
 #include <vector>
 #include <cstring>
 #include <arpa/inet.h>
+#include <unordered_map>
+#include <mutex>
+#include <iomanip>
+#include <ctime>
+#include <cmath>
+#include <string>
 
 #include "../protocol/smart_grid_protocol.hpp"
 #include "device_registry.hpp"
@@ -11,8 +17,173 @@
 
 using boost::asio::ip::tcp;
 std::shared_ptr<tcp::socket> centralSocket;
-DeviceRegistry deviceRegistry; //globalni registar
+DeviceRegistry deviceRegistry; // globalni registar
 Database database("database/region2.db");
+
+std::unordered_map<std::string, double> latestPowerByDevice;
+std::mutex powerMutex;
+std::mutex centralSyncMutex;
+
+double updateAndGetTotalNetworkLoad(
+    const std::string& deviceUri,
+    double currentPowerKw)
+{
+    std::lock_guard<std::mutex> lock(powerMutex);
+
+    latestPowerByDevice[deviceUri] = currentPowerKw;
+
+    double totalLoadKw = 0.0;
+
+    for (const auto& device : latestPowerByDevice)
+    {
+        totalLoadKw += device.second;
+    }
+
+    std::cout
+        << "Trenutno ukupno opterecenje regije 2: "
+        << std::fixed << std::setprecision(2)
+        << totalLoadKw
+        << " kW"
+        << std::endl;
+
+    return totalLoadKw;
+}
+
+double calculateDynamicTariff(
+    uint8_t userType,
+    double networkLoadKw,
+    bool reductionAccepted)
+{
+    std::time_t now = std::time(nullptr);
+    std::tm localTime{};
+
+#ifdef _WIN32
+    localtime_s(&localTime, &now);
+#else
+    localtime_r(&now, &localTime);
+#endif
+
+    int hour = localTime.tm_hour;
+    int day = localTime.tm_wday;
+    bool daylightSaving = localTime.tm_isdst > 0;
+
+    bool lowerTariff = false;
+
+    if (userType == 1)
+    {
+        if (day == 0)
+        {
+            lowerTariff = true;
+        }
+        else
+        {
+            if (daylightSaving)
+            {
+                lowerTariff =
+                    (hour >= 14 && hour < 17) ||
+                    (hour >= 23 || hour < 8);
+            }
+            else
+            {
+                lowerTariff =
+                    (hour >= 13 && hour < 16) ||
+                    (hour >= 22 || hour < 7);
+            }
+        }
+    }
+    else if (userType == 2)
+    {
+        if (day == 0 || day == 6)
+        {
+            lowerTariff = true;
+        }
+        else
+        {
+            if (daylightSaving)
+            {
+                lowerTariff = (hour >= 23 || hour < 8);
+            }
+            else
+            {
+                lowerTariff = (hour >= 22 || hour < 7);
+            }
+        }
+    }
+
+    double price = 0.0;
+
+    if (userType == 1)
+    {
+        price = lowerTariff ? 0.10 : 0.20;
+    }
+    else if (userType == 2)
+    {
+        price = lowerTariff ? 0.14 : 0.24;
+    }
+    else
+    {
+        price = lowerTariff ? 0.10 : 0.20;
+    }
+
+    if (networkLoadKw >= 10.0)
+    {
+        price *= 1.20;
+    }
+    else if (networkLoadKw >= 5.0)
+    {
+        price *= 1.10;
+    }
+
+    bool discountApplied = false;
+
+    if (networkLoadKw >= 10.0 && reductionAccepted)
+    {
+        price *= 0.90;
+        discountApplied = true;
+    }
+
+    price = std::round(price * 100.0) / 100.0;
+
+    std::cout
+        << "\n=== DINAMICKA TARIFA ==="
+        << std::endl;
+
+    std::cout
+        << "Tip korisnika: "
+        << (userType == 1 ? "DOMACINSTVO" :
+            userType == 2 ? "INDUSTRIJA" : "NEPOZNAT")
+        << std::endl;
+
+    std::cout
+        << "Tarifni period: "
+        << (lowerTariff ? "NIZA TARIFA" : "VISA TARIFA")
+        << std::endl;
+
+    std::cout
+        << "Opterecenje: "
+        << std::fixed << std::setprecision(2)
+        << networkLoadKw
+        << " kW"
+        << std::endl;
+
+    std::cout
+        << "Popust za smanjenje potrosnje: "
+        << (discountApplied ? "10%" : "NEMA")
+        << std::endl;
+
+    std::cout
+        << "Izracunata cijena: "
+        << std::fixed << std::setprecision(2)
+        << price
+        << " KM/kWh"
+        << std::endl;
+
+    std::cout
+        << "========================"
+        << std::endl;
+
+    return price;
+}
 void acceptClient(
     tcp::acceptor& acceptor,
     boost::asio::io_context& io);
@@ -24,10 +195,12 @@ void handleClient(
 
 void readConsumptionReport(
     std::shared_ptr<tcp::socket> socket,
-    int reportCount = 0);
+    int reportCount,
+    uint8_t userType);
 void readConsumptionReport(
     std::shared_ptr<tcp::socket> socket,
-    int reportCount)
+    int reportCount,
+    uint8_t userType)
 
 {
     auto consumptionHeader =
@@ -37,7 +210,7 @@ void readConsumptionReport(
         *socket,
         boost::asio::buffer(*consumptionHeader),
 
-       [socket, consumptionHeader, reportCount]
+       [socket, consumptionHeader, reportCount, userType]
         (
             const boost::system::error_code& headerError,
             std::size_t headerBytes
@@ -107,7 +280,8 @@ void readConsumptionReport(
  consumptionHeader,
  consumptionPayload,
  consumptionType,
- reportCount]
+ reportCount,
+ userType]
                 (
                     const boost::system::error_code& payloadError,
                     std::size_t payloadBytes
@@ -184,6 +358,13 @@ void readConsumptionReport(
                             << report.current_power_kw
                             << " kW"
                             << std::endl;
+
+double totalNetworkLoadKw =
+    updateAndGetTotalNetworkLoad(
+        report.device_uri,
+        report.current_power_kw
+    );
+
 database.insertConsumption(
     report.device_uri,
     report.timestamp,
@@ -193,6 +374,8 @@ database.insertConsumption(
 // Slanje mjerenja centralnom serveru u realnom vremenu
 if (centralSocket && centralSocket->is_open())
 {
+    std::lock_guard<std::mutex> centralLock(centralSyncMutex);
+
     RegionSync sync{};
 
     sync.source_region = 2;
@@ -267,7 +450,7 @@ else
                                 *serializedConsumptionAck
                             ),
 
-                         [socket, serializedConsumptionAck, reportCount, report]
+                         [socket, serializedConsumptionAck, reportCount, report, userType, totalNetworkLoadKw]
                             (
                                 const boost::system::error_code& writeError,
                                 std::size_t bytesTransferred
@@ -300,7 +483,7 @@ else
                                 // Nakon ACK-a ponovo cekamo novi report
                                 if (reportCount + 1 < 5)
 {
-    readConsumptionReport(socket, reportCount + 1);
+    readConsumptionReport(socket, reportCount + 1, userType);
 }
 else
 {
@@ -311,7 +494,10 @@ else
     std::cout
         << "Server je spreman da posalje REDUCE_CONSUMPTION_CMD."
         << std::endl;
-        ReduceConsumptionCommand command{};
+
+double networkLoadKw = totalNetworkLoadKw;
+
+ReduceConsumptionCommand command{};
 
 std::strncpy(
     command.device_uri,
@@ -332,7 +518,7 @@ auto serializedCommand =
     *socket,
     boost::asio::buffer(*serializedCommand),
 
-    [socket, serializedCommand, command]
+    [socket, serializedCommand, command, userType, networkLoadKw]
     (
         const boost::system::error_code& writeError,
         std::size_t bytesTransferred
@@ -362,7 +548,7 @@ auto serializedCommand =
 boost::asio::async_read(
     *socket,
     boost::asio::buffer(*commandAckHeader),
-    [socket, commandAckHeader, command]
+    [socket, commandAckHeader, command, userType, networkLoadKw]
     (
         const boost::system::error_code& readError,
         std::size_t
@@ -397,7 +583,7 @@ boost::asio::async_read(
         boost::asio::async_read(
             *socket,
             boost::asio::buffer(*commandAckPayload),
-            [socket, commandAckHeader, commandAckPayload, command]
+            [socket, commandAckHeader, commandAckPayload, command, userType, networkLoadKw]
             (
                 const boost::system::error_code& payloadError,
                 std::size_t
@@ -459,21 +645,30 @@ boost::asio::async_read(
 
     TariffUpdate tariff{};
 
-    tariff.price_per_kwh = 0.25;
-    
+    tariff.price_per_kwh =
+        calculateDynamicTariff(
+            userType,
+            networkLoadKw,
+            true
+        );
+
     database.insertTariff(
-    tariff.price_per_kwh
-);
+        tariff.price_per_kwh
+    );
+
+   
 
     auto serializedTariff =
         std::make_shared<std::vector<uint8_t>>(
             serializeTariffUpdate(tariff)
         );
 
+    double sentPrice = tariff.price_per_kwh;
+
     boost::asio::async_write(
         *socket,
         boost::asio::buffer(*serializedTariff),
-        [socket, serializedTariff]
+        [socket, serializedTariff, sentPrice]
         (
             const boost::system::error_code& tariffError,
             std::size_t bytesTransferred
@@ -494,7 +689,10 @@ boost::asio::async_read(
                 << std::endl;
 
             std::cout
-                << "Nova cijena: 0.25 KM/kWh"
+                << "Nova cijena: "
+                << std::fixed << std::setprecision(2)
+                << sentPrice
+                << " KM/kWh"
                 << std::endl;
 
             std::cout
@@ -692,7 +890,7 @@ else
                                 *serializedAck
                             ),
 
-                            [socket, serializedAck]
+                            [socket, serializedAck, request]
                             (
                                 const boost::system::error_code&
                                     writeError,
@@ -713,7 +911,7 @@ else
                                     << "REGISTER_ACK poslan."
                                     << std::endl;
 
-                                readConsumptionReport(socket);
+                                readConsumptionReport(socket, 0, request.user_type);
                             }
                         );
                     }
