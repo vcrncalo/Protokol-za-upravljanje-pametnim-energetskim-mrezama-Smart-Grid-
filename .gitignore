@@ -11,3 +11,4 @@ smart_meter/client_async_test
 
 # SQLite databases
 database/*.db
+web_monitoring/server
