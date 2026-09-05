@@ -16,6 +16,7 @@
 #include "../protocol/smart_grid_protocol.hpp"
 #include "device_registry.hpp"
 #include "../database/database.hpp"
+#include "../security/pqc_tls.hpp"
 
 using boost::asio::ip::tcp;
 namespace ssl = boost::asio::ssl;
@@ -1383,12 +1384,13 @@ void connectToCentralServer()
         static ssl::context centralSslContext(
             ssl::context::tls_client
         );
+        configurePqcTls(centralSslContext);
 
         // Regionalni server 2 vjeruje SmartGrid CA certifikatu
         // kojim je potpisan certifikat centralnog servera.
         centralSslContext.load_verify_file(
-            "certs/ca.crt"
-        );
+    "certs/pqc/pqc_ca.crt"
+);
 
         centralSslContext.set_verify_mode(
             ssl::verify_peer
@@ -1457,6 +1459,7 @@ if (!database.initialize())
         boost::asio::io_context io;
 
         ssl::context sslContext(ssl::context::tls_server);
+        configurePqcTls(sslContext);
 
         sslContext.set_options(
             ssl::context::default_workarounds |
@@ -1464,21 +1467,20 @@ if (!database.initialize())
             ssl::context::no_sslv3
         );
 
-        sslContext.use_certificate_chain_file(
-            "certs/regional_server.crt"
-        );
+       sslContext.use_certificate_chain_file(
+    "certs/pqc/region2_server.crt"
+);
 
-        sslContext.use_private_key_file(
-            "certs/regional_server.key",
-            ssl::context::pem
-        );
-
+sslContext.use_private_key_file(
+    "certs/pqc/region2_server.key",
+    ssl::context::pem
+);
 
         // mTLS: Regionalni server 2 zahtijeva validan Smart Meter
         // certifikat potpisan SmartGrid CA certifikatom.
         sslContext.load_verify_file(
-            "certs/ca.crt"
-        );
+    "certs/pqc/pqc_ca.crt"
+);
 
         sslContext.set_verify_mode(
             ssl::verify_peer |

@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include "../protocol/smart_grid_protocol.hpp"
 #include "../database/database.hpp"
+#include "../security/pqc_tls.hpp"
 
 using boost::asio::ip::tcp;
 namespace ssl = boost::asio::ssl;
@@ -183,18 +184,22 @@ int main()
             ssl::context::no_sslv2 |
             ssl::context::no_sslv3
         );
+        configurePqcTls(sslContext);
 
         // Za sada koristimo isti serverski certifikat potpisan
         // SmartGrid CA certifikatom. Kasnije mozemo izdvojiti
         // poseban certifikat centralnog servera.
         sslContext.use_certificate_chain_file(
-            "certs/regional_server.crt"
-        );
+    "certs/pqc/central_server.crt"
+);
 
-        sslContext.use_private_key_file(
-            "certs/regional_server.key",
-            ssl::context::pem
-        );
+sslContext.use_private_key_file(
+    "certs/pqc/central_server.key",
+    ssl::context::pem
+);
+std::cout
+    << "PQC TLS konfiguracija: TLS 1.3 + X25519MLKEM768 + ML-DSA-44"
+    << std::endl;
 
         tcp::acceptor acceptor(
             io_context,

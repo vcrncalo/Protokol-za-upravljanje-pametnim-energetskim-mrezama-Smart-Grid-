@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <ctime>
 #include "../protocol/smart_grid_protocol.hpp"
+#include "../security/pqc_tls.hpp"
 #include <thread>
 #include <chrono>
 #include <string>
@@ -62,12 +63,12 @@ std::string deviceUri =
 try
 {
         boost::asio::io_context io;
-
-        ssl::context sslContext(ssl::context::tls_client);
+ssl::context sslContext(ssl::context::tls_client);
+       configurePqcTls(sslContext);
 
         // Smart Meter vjeruje CA certifikatu kojim je potpisan
         // certifikat regionalnog servera.
-        sslContext.load_verify_file("certs/ca.crt");
+      sslContext.load_verify_file("certs/pqc/pqc_ca.crt");
         sslContext.set_verify_mode(ssl::verify_peer);
 
         // mTLS: Smart Meter salje digitalni certifikat koji odgovara
@@ -77,13 +78,13 @@ try
 
         if (city == "sarajevo" && meterId == "001")
         {
-            clientCertPath = "certs/meter001.crt";
-            clientKeyPath = "certs/meter001.key";
+           clientCertPath = "certs/pqc/meter001.crt";
+clientKeyPath = "certs/pqc/meter001.key";
         }
         else if (city == "mostar" && meterId == "002")
         {
-            clientCertPath = "certs/meter002.crt";
-            clientKeyPath = "certs/meter002.key";
+          clientCertPath = "certs/pqc/meter002.crt";
+clientKeyPath = "certs/pqc/meter002.key";
         }
         else
         {
@@ -92,13 +93,13 @@ try
             // REGISTER_REQ ako URI ne odgovara SAN URI-u certifikata.
             if (city == "sarajevo")
             {
-                clientCertPath = "certs/meter001.crt";
-                clientKeyPath = "certs/meter001.key";
+                 clientCertPath = "certs/pqc/meter001.crt";
+clientKeyPath = "certs/pqc/meter001.key";
             }
             else if (city == "mostar")
             {
-                clientCertPath = "certs/meter002.crt";
-                clientKeyPath = "certs/meter002.key";
+              clientCertPath = "certs/pqc/meter002.crt";
+clientKeyPath = "certs/pqc/meter002.key";
             }
             else
             {
@@ -145,6 +146,52 @@ try
         std::cout
             << "TLS handshake uspjesan. Povezan sa regionalnim serverom!"
             << std::endl;
+            SSL* sslHandle = socket.native_handle();
+
+const char* tlsVersion =
+    SSL_get_version(sslHandle);
+
+const char* negotiatedGroup =
+    SSL_get0_group_name(sslHandle);
+
+const SSL_CIPHER* cipher =
+    SSL_get_current_cipher(sslHandle);
+ const char* peerSignature = nullptr;
+
+int signatureResult =
+    SSL_get0_peer_signature_name(
+        sslHandle,
+        &peerSignature
+    );
+
+std::cout << "\n=== PQC TLS INFORMACIJE ===" << std::endl;
+
+std::cout
+    << "TLS verzija: "
+    << (tlsVersion ? tlsVersion : "nepoznata")
+    << std::endl;
+
+std::cout
+    << "Pregovorena grupa: "
+    << (negotiatedGroup ? negotiatedGroup : "nepoznata")
+    << std::endl;
+    std::cout
+    << "Potpis TLS handshake-a: "
+    << ((signatureResult == 1 && peerSignature)
+            ? peerSignature
+            : "nepoznat")
+    << std::endl;
+
+std::cout
+    << "Cipher suite: "
+    << (cipher ? SSL_CIPHER_get_name(cipher) : "nepoznat")
+    << std::endl;
+    
+    
+
+std::cout
+    << "=========================="
+    << std::endl;
 
 
         // ==========================================
