@@ -1,4 +1,5 @@
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
 #include <iostream>
 #include <cstring>
 #include <vector>
@@ -12,6 +13,7 @@
 #include <cmath>
 
 using boost::asio::ip::tcp;
+namespace ssl = boost::asio::ssl;
 
 int main(int argc, char* argv[])
 {
@@ -60,7 +62,66 @@ std::string deviceUri =
 try
 {
         boost::asio::io_context io;
-        tcp::socket socket(io);
+
+        ssl::context sslContext(ssl::context::tls_client);
+
+        // Smart Meter vjeruje CA certifikatu kojim je potpisan
+        // certifikat regionalnog servera.
+        sslContext.load_verify_file("certs/ca.crt");
+        sslContext.set_verify_mode(ssl::verify_peer);
+
+        // mTLS: Smart Meter salje digitalni certifikat koji odgovara
+        // njegovom URI identitetu.
+        std::string clientCertPath;
+        std::string clientKeyPath;
+
+        if (city == "sarajevo" && meterId == "001")
+        {
+            clientCertPath = "certs/meter001.crt";
+            clientKeyPath = "certs/meter001.key";
+        }
+        else if (city == "mostar" && meterId == "002")
+        {
+            clientCertPath = "certs/meter002.crt";
+            clientKeyPath = "certs/meter002.key";
+        }
+        else
+        {
+            // Za negativni URI test koristimo certifikat legitimnog
+            // Smart Metera iz iste regije. Server tada mora odbiti
+            // REGISTER_REQ ako URI ne odgovara SAN URI-u certifikata.
+            if (city == "sarajevo")
+            {
+                clientCertPath = "certs/meter001.crt";
+                clientKeyPath = "certs/meter001.key";
+            }
+            else if (city == "mostar")
+            {
+                clientCertPath = "certs/meter002.crt";
+                clientKeyPath = "certs/meter002.key";
+            }
+            else
+            {
+                std::cerr
+                    << "Za zadani grad nije konfigurisan Smart Meter certifikat."
+                    << std::endl;
+                return 1;
+            }
+        }
+
+        sslContext.use_certificate_chain_file(clientCertPath);
+
+        sslContext.use_private_key_file(
+            clientKeyPath,
+            ssl::context::pem
+        );
+
+        std::cout
+            << "Koristi se Smart Meter certifikat: "
+            << clientCertPath
+            << std::endl;
+
+        ssl::stream<tcp::socket> socket(io, sslContext);
 
         tcp::resolver resolver(io);
 
@@ -71,12 +132,18 @@ try
             );
 
         boost::asio::connect(
-            socket,
+            socket.next_layer(),
             endpoints
         );
 
         std::cout
-            << "Povezan sa serverom!"
+            << "TCP konekcija uspostavljena. Pokrecem TLS handshake..."
+            << std::endl;
+
+        socket.handshake(ssl::stream_base::client);
+
+        std::cout
+            << "TLS handshake uspjesan. Povezan sa regionalnim serverom!"
             << std::endl;
 
 
@@ -780,10 +847,31 @@ else
         << std::endl;
 }
                 }
+                else if (commandHeader[1] ==
+                    static_cast<uint8_t>(
+                        MessageType::TARIFF_UPDATE))
+                {
+                    // Kada je opterecenje regije ispod praga,
+                    // server ne salje REDUCE komandu nego odmah tarifu.
+                    TariffUpdate tariff =
+                        deserializeTariffUpdate(
+                            fullCommand
+                        );
+
+                    std::cout
+                        << "TARIFF_UPDATE primljen."
+                        << std::endl;
+
+                    std::cout
+                        << "Nova cijena elektricne energije: "
+                        << tariff.price_per_kwh
+                        << " KM/kWh"
+                        << std::endl;
+                }
                 else
                 {
                     std::cout
-                        << "Primljena poruka nije REDUCE_CONSUMPTION_CMD."
+                        << "Primljena neocekivana poruka od regionalnog servera."
                         << std::endl;
                 }
             }

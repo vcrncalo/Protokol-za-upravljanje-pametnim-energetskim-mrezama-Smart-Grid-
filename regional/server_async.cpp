@@ -1,4 +1,6 @@
 #include <boost/asio.hpp>
+#include <boost/asio/ssl.hpp>
+#include <openssl/x509v3.h>
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -15,12 +17,66 @@
 #include "../database/database.hpp"
 
 using boost::asio::ip::tcp;
-std::shared_ptr<tcp::socket> centralSocket; //trajna konekcija
+namespace ssl = boost::asio::ssl;
+using ssl_socket = ssl::stream<tcp::socket>;
+std::shared_ptr<ssl_socket> centralSocket; // trajna TLS konekcija prema centralnom serveru
 DeviceRegistry deviceRegistry; //globalni registar
 Database database("database/region1.db");
 std::unordered_map<std::string, double> latestPowerByDevice;
 std::mutex powerMutex;
 std::mutex centralSyncMutex;
+
+
+std::string getPeerCertificateUri(ssl_socket& socket)
+{
+    X509* cert = SSL_get_peer_certificate(socket.native_handle());
+
+    if (!cert)
+    {
+        return "";
+    }
+
+    std::string certificateUri;
+
+    GENERAL_NAMES* sanNames = static_cast<GENERAL_NAMES*>(
+        X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr)
+    );
+
+    if (sanNames)
+    {
+        const int count = sk_GENERAL_NAME_num(sanNames);
+
+        for (int i = 0; i < count; ++i)
+        {
+            const GENERAL_NAME* name = sk_GENERAL_NAME_value(sanNames, i);
+
+            if (name && name->type == GEN_URI)
+            {
+                const ASN1_IA5STRING* uri = name->d.uniformResourceIdentifier;
+
+                if (uri)
+                {
+                    const unsigned char* data = ASN1_STRING_get0_data(uri);
+                    const int length = ASN1_STRING_length(uri);
+
+                    if (data && length > 0)
+                    {
+                        certificateUri.assign(
+                            reinterpret_cast<const char*>(data),
+                            static_cast<std::size_t>(length)
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+
+        GENERAL_NAMES_free(sanNames);
+    }
+
+    X509_free(cert);
+    return certificateUri;
+}
 double updateAndGetTotalNetworkLoad(
     const std::string& deviceUri,
     double currentPowerKw)
@@ -187,19 +243,20 @@ if (networkLoadKw >= 10.0 && reductionAccepted)
 }
 void acceptClient(
     tcp::acceptor& acceptor,
-    boost::asio::io_context& io);
+    boost::asio::io_context& io,
+    ssl::context& sslContext);
 
 void handleClient(
-    std::shared_ptr<tcp::socket> socket);
+    std::shared_ptr<ssl_socket> socket);
 
 
 
 void readConsumptionReport(
-    std::shared_ptr<tcp::socket> socket,
+    std::shared_ptr<ssl_socket> socket,
     uint8_t userType,
     int reportCount = 0);
 void readConsumptionReport(
-    std::shared_ptr<tcp::socket> socket,
+    std::shared_ptr<ssl_socket> socket,
     uint8_t userType,
     int reportCount)
 
@@ -371,7 +428,7 @@ database.insertConsumption(
     report.current_power_kw
 );
 // Slanje novog mjerenja centralnom serveru u realnom vremenu
-if (centralSocket && centralSocket->is_open())
+if (centralSocket && centralSocket->next_layer().is_open())
 {
     RegionSync sync{};
 
@@ -918,7 +975,7 @@ else
 
                                                                             // Novo mjerenje prosljedjujemo i centralnom serveru.
                                                                             if (centralSocket &&
-                                                                                centralSocket->is_open())
+                                                                                centralSocket->next_layer().is_open())
                                                                             {
                                                                                 try
                                                                                 {
@@ -1061,8 +1118,29 @@ else
 }
 
 void handleClient(
-    std::shared_ptr<tcp::socket> socket)
+    std::shared_ptr<ssl_socket> socket)
 {
+    auto certificateUri =
+        std::make_shared<std::string>(
+            getPeerCertificateUri(*socket)
+        );
+
+    if (certificateUri->empty())
+    {
+        std::cout
+            << "Klijentski certifikat nema URI u Subject Alternative Name polju."
+            << std::endl;
+
+        boost::system::error_code closeError;
+        socket->lowest_layer().close(closeError);
+        return;
+    }
+
+    std::cout
+        << "URI iz Smart Meter certifikata: "
+        << *certificateUri
+        << std::endl;
+
     auto headerBuffer =
         std::make_shared<std::vector<uint8_t>>(4);
 
@@ -1070,7 +1148,7 @@ void handleClient(
         *socket,
         boost::asio::buffer(*headerBuffer),
 
-        [socket, headerBuffer]
+        [socket, headerBuffer, certificateUri]
         (
             const boost::system::error_code& readError,
             std::size_t bytesTransferred
@@ -1112,7 +1190,8 @@ void handleClient(
                 [socket,
                  headerBuffer,
                  payloadBuffer,
-                 messageType]
+                 messageType,
+                 certificateUri]
                 (
                     const boost::system::error_code& payloadError,
                     std::size_t payloadBytes
@@ -1166,38 +1245,54 @@ std::cout
     << std::endl;
 
 
-// Dodajemo Smart Meter u registry
-bool registered =
-    deviceRegistry.registerDevice(
-        request.device_uri,
-        request.region_id,
-        request.user_type
-    );
+// URI iz certifikata mora odgovarati URI-u iz REGISTER_REQ.
+bool uriMatchesCertificate =
+    (*certificateUri == std::string(request.device_uri));
 
-
-// Ispisujemo sve trenutno registrovane Smart Metere
-deviceRegistry.printDevices();
-if (registered)
+if (!uriMatchesCertificate)
 {
-    database.insertDevice(
-        request.device_uri,
-        request.region_id,
-        request.user_type
-    );
+    std::cout
+        << "REGISTRACIJA ODBIJENA: URI iz certifikata ne odgovara URI-u iz REGISTER_REQ."
+        << std::endl;
+
+    std::cout
+        << "Certifikat URI: "
+        << *certificateUri
+        << std::endl;
+
+    std::cout
+        << "REGISTER_REQ URI: "
+        << request.device_uri
+        << std::endl;
+}
+
+bool registered = false;
+
+if (uriMatchesCertificate)
+{
+    registered =
+        deviceRegistry.registerDevice(
+            request.device_uri,
+            request.region_id,
+            request.user_type
+        );
+
+    deviceRegistry.printDevices();
+
+    if (registered)
+    {
+        database.insertDevice(
+            request.device_uri,
+            request.region_id,
+            request.user_type
+        );
+    }
 }
 
 
 // Kreiramo REGISTER_ACK
 RegisterAck ack{};
-
-if (registered)
-{
-    ack.status = 1;
-}
-else
-{
-    ack.status = 0;
-}
+ack.status = (uriMatchesCertificate && registered) ? 1 : 0;
 
                         auto serializedAck =
                             std::make_shared<
@@ -1212,7 +1307,7 @@ else
                                 *serializedAck
                             ),
 
-                            [socket, serializedAck, request]
+                            [socket, serializedAck, request, uriMatchesCertificate, registered]
                             (
                                 const boost::system::error_code&
                                     writeError,
@@ -1233,10 +1328,22 @@ else
                                     << "REGISTER_ACK poslan."
                                     << std::endl;
 
-                                readConsumptionReport(
-    socket,
-    request.user_type
-);
+                                if (uriMatchesCertificate && registered)
+                                {
+                                    readConsumptionReport(
+                                        socket,
+                                        request.user_type
+                                    );
+                                }
+                                else
+                                {
+                                    std::cout
+                                        << "Veza se zatvara jer registracija nije autorizovana."
+                                        << std::endl;
+
+                                    boost::system::error_code closeError;
+                                    socket->lowest_layer().close(closeError);
+                                }
                             }
                         );
                     }
@@ -1249,33 +1356,59 @@ else
 
 void acceptClient(
     tcp::acceptor& acceptor,
-    boost::asio::io_context& io)
+    boost::asio::io_context& io,
+    ssl::context& sslContext)
 {
     auto socket =
-        std::make_shared<tcp::socket>(io);
+        std::make_shared<ssl_socket>(io, sslContext);
 
     acceptor.async_accept(
-        *socket,
-        [&acceptor, &io, socket]
+        socket->next_layer(),
+        [&acceptor, &io, &sslContext, socket]
         (const boost::system::error_code& error)
         {
             if (error)
             {
                 std::cout
-                    << "Greska pri povezivanju klijenta: "
+                    << "Greska pri TCP povezivanju Smart Metera: "
                     << error.message()
                     << std::endl;
 
+                acceptClient(acceptor, io, sslContext);
                 return;
             }
 
             std::cout
-                << "Novi Smart Meter se povezao!"
+                << "TCP konekcija Smart Metera uspostavljena. Pokrecem TLS handshake..."
                 << std::endl;
 
-            
-	    handleClient(socket);
-            acceptClient(acceptor, io);
+            socket->async_handshake(
+                ssl::stream_base::server,
+                [socket]
+                (const boost::system::error_code& handshakeError)
+                {
+                    if (handshakeError)
+                    {
+                        std::cout
+                            << "TLS handshake nije uspio: "
+                            << handshakeError.message()
+                            << std::endl;
+
+                        boost::system::error_code closeError;
+                        socket->lowest_layer().close(closeError);
+                        return;
+                    }
+
+                    std::cout
+                        << "TLS handshake uspjesan. Smart Grid poruke su sifrovane."
+                        << std::endl;
+
+                    handleClient(socket);
+                }
+            );
+
+            // Server odmah nastavlja prihvatati druge Smart Metere.
+            acceptClient(acceptor, io, sslContext);
         }
     );
 }
@@ -1285,21 +1418,64 @@ void connectToCentralServer()
     try
     {
         static boost::asio::io_context centralIoContext;
+        static ssl::context centralSslContext(
+            ssl::context::tls_client
+        );
+
+        // Regionalni server vjeruje SmartGrid CA certifikatu
+        // kojim je potpisan certifikat centralnog servera.
+        centralSslContext.load_verify_file(
+            "certs/ca.crt"
+        );
+
+        centralSslContext.set_verify_mode(
+            ssl::verify_peer
+        );
 
         tcp::resolver resolver(centralIoContext);
-        auto endpoints = resolver.resolve("127.0.0.1", "6000");
 
-        centralSocket = std::make_shared<tcp::socket>(centralIoContext);
+        auto endpoints =
+            resolver.resolve(
+                "127.0.0.1",
+                "6000"
+            );
 
-        boost::asio::connect(*centralSocket, endpoints);
+        centralSocket =
+            std::make_shared<ssl_socket>(
+                centralIoContext,
+                centralSslContext
+            );
 
-        std::cout << "Regionalni server 1 povezan sa centralnim serverom."
-                  << std::endl;
+        // Prvo uspostavljamo TCP konekciju.
+        boost::asio::connect(
+            centralSocket->next_layer(),
+            endpoints
+        );
+
+        std::cout
+            << "TCP konekcija sa centralnim serverom uspostavljena. "
+            << "Pokrecem TLS handshake..."
+            << std::endl;
+
+        // Zatim se regionalni server ponasa kao TLS klijent.
+        centralSocket->handshake(
+            ssl::stream_base::client
+        );
+
+        std::cout
+            << "TLS handshake sa centralnim serverom uspjesan."
+            << std::endl;
+
+        std::cout
+            << "Regionalni server 1 sigurno povezan sa centralnim serverom."
+            << std::endl;
     }
     catch (const std::exception& e)
     {
-        std::cerr << "Greska pri povezivanju sa centralnim serverom: "
-                  << e.what() << std::endl;
+        std::cerr
+            << "Greska pri TLS povezivanju sa centralnim serverom: "
+            << e.what()
+            << std::endl;
     }
 }
 
@@ -1326,12 +1502,41 @@ if (!database.initialize())
             )
         );
 
+        // TLS kontekst za Smart Meter <-> regionalni server.
+        // Aplikacijske Smart Grid poruke ostaju nepromijenjene.
+        ssl::context sslContext(ssl::context::tls_server);
+
+        sslContext.set_options(
+            ssl::context::default_workarounds |
+            ssl::context::no_sslv2 |
+            ssl::context::no_sslv3
+        );
+
+        sslContext.use_certificate_chain_file(
+            "certs/regional_server.crt"
+        );
+
+        sslContext.use_private_key_file(
+            "certs/regional_server.key",
+            ssl::context::pem
+        );
+
+        // mTLS: zahtijevamo validan Smart Meter certifikat
+        // potpisan SmartGrid CA certifikatom.
+        sslContext.load_verify_file(
+            "certs/ca.crt"
+        );
+
+        sslContext.set_verify_mode(
+            ssl::verify_peer |
+            ssl::verify_fail_if_no_peer_cert
+        );
+
         std::cout
-            << "Asinhroni server slusa na portu 5001..."
+            << "Asinhroni TLS server slusa na portu 5001..."
             << std::endl;
 
-	 acceptClient(acceptor, io);
-	 
+        acceptClient(acceptor, io, sslContext);
 
         io.run();
       
@@ -1346,3 +1551,4 @@ if (!database.initialize())
 
     return 0;
 }
+

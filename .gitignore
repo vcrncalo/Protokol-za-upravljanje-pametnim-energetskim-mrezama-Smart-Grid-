@@ -1,0 +1,13 @@
+# Private keys and certificate requests
+*.key
+*.csr
+*.srl
+
+# Compiled binaries
+regional/server_async
+regional/server_region2
+central/sync_server
+smart_meter/client_async_test
+
+# SQLite databases
+database/*.db
