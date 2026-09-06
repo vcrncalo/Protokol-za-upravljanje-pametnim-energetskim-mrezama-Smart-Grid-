@@ -69,28 +69,113 @@ Podaci su serijalizovani u mrežni redoslijed bajtova, a funkcije za serijalizac
 └── web_monitoring/ Jednostavni web server za pregled agregiranih podataka
 ```
 
-## Preduslovi
+## Podešavanje okruženja za Boost.Asio
 
-Za kompilaciju su potrebni:
+Boost.Asio je biblioteka za mrežno programiranje u jeziku C++. U ovom projektu koristi se **Boost verzija Asio biblioteke**, što se vidi po include direktivi `#include <boost/asio.hpp>` i namespace-u `boost::asio`. Zbog toga je potrebno instalirati Boost biblioteke, a ne samo standalone Asio repozitorij.
 
-- C++ kompajler sa podrškom za C++17,
-- Boost biblioteke, posebno Boost.Asio,
-- SQLite3 razvojni paket,
-- pthread podrška,
-- OpenSSL za TLS/PQC komponente.
+### Korak 1: Instalacija osnovnih alata
 
-Na Windows računaru najjednostavnije je koristiti WSL sa Ubuntu okruženjem ili MinGW/MSYS2 okruženje koje ima navedene biblioteke. Dio izvornog koda koristi zaglavlja kao što su `arpa/inet.h` i `endian.h`, pa je Linux/WSL okruženje praktičnije za prve testove.
+Potrebni su C++ kompajler koji podržava najmanje C++17 standard, CMake i osnovni alati za izgradnju projekta.
 
-Primjer instalacije zavisnosti u Ubuntu/WSL okruženju:
+**Ubuntu / Debian / WSL**
 
 ```bash
 sudo apt update
-sudo apt install build-essential libboost-system-dev libsqlite3-dev libssl-dev
+sudo apt install build-essential cmake git
 ```
+
+**Fedora / RHEL**
+
+```bash
+sudo dnf install gcc-c++ make cmake git
+```
+
+**macOS**
+
+Instalirajte Xcode command line tools:
+
+```bash
+xcode-select --install
+```
+
+Zatim instalirajte CMake i Boost pomoću Homebrew-a:
+
+```bash
+brew install cmake boost
+```
+
+Na Windows računaru preporučuje se korištenje WSL-a sa Ubuntu distribucijom. Dio izvornog koda koristi zaglavlja `arpa/inet.h` i `endian.h`, zbog čega je Linux/WSL okruženje najjednostavnije za pokretanje postojećih primjera.
+
+### Korak 2: Instalacija Boost.Asio i ostalih biblioteka
+
+U Ubuntu/WSL okruženju instalirajte Boost.System, SQLite3 i OpenSSL:
+
+```bash
+sudo apt install libboost-system-dev libsqlite3-dev libssl-dev
+```
+
+Paket `libboost-system-dev` omogućava povezivanje programa sa Boost.Asio komponentom koja se koristi u TCP i UDP primjerima. SQLite3 je potreban za rad baze podataka, a OpenSSL za TLS i PQC dio projekta.
+
+Na Fedori/RHEL-u koristite:
+
+```bash
+sudo dnf install boost-system-devel sqlite-devel openssl-devel
+```
+
+Na macOS-u, ako Boost nije instaliran ranije, koristite:
+
+```bash
+brew install boost sqlite openssl
+```
+
+### Korak 3: Provjera instalacije
+
+Provjerite da kompajler, CMake i Boost postoje u okruženju:
+
+```bash
+g++ --version
+cmake --version
+```
+
+Za brzu provjeru Boost.Asio okruženja kompajlirajte najjednostavniji program iz ovog repozitorija:
+
+```bash
+g++ -std=c++17 main.cpp -o smartgrid_demo
+./smartgrid_demo
+```
+
+Ako je podešavanje uspješno, program će ispisati:
+
+```text
+Smart Grid projekat radi!
+```
+
+### Korak 4: Standalone Asio biblioteka
+
+Standalone Asio se može preuzeti i iz zasebnog repozitorija:
+
+```bash
+git clone https://github.com/chriskohlhoff/asio.git
+cd asio
+git submodule update --init --recursive
+```
+
+Međutim, standalone Asio koristi include putanju `asio.hpp` i namespace `asio`, dok ovaj projekat koristi `boost/asio.hpp` i `boost::asio`. Zbog toga standalone Asio nije zamjena za Boost instalaciju bez dodatne izmjene izvornog koda.
+
+Ako se standalone Asio koristi u posebnom projektu koji je za to pripremljen, izgradnja se može izvršiti ovako:
+
+```bash
+mkdir build
+cd build
+cmake ..
+cmake --build .
+```
+
+Za ovaj Smart Grid projekat preporučuje se da se koristi Boost instalacija iz prethodnih koraka.
 
 ## Najjednostavniji primjer: server i smart meter
 
-Komande se izvršavaju iz korijenskog direktorija repozitorija. Prvo se kompajliraju server i klijent:
+Komande se izvršavaju iz glavnog direktorija repozitorija. Prvo se kompajliraju server i klijent:
 
 ```bash
 g++ -std=c++17 regional/server_basic.cpp -o regional/server_basic -lboost_system -pthread
