@@ -32,7 +32,7 @@ Projekat je napisan u jeziku C++ i koristi:
 - **Boost.Asio** za TCP i UDP mrežnu komunikaciju,
 - **SQLite** za lokalno čuvanje uređaja, mjerenja, alarma i sinhronizacija,
 - vlastiti binarni protokol definisan u `protocol/smart_grid_protocol.hpp`,
-- TLS 1.3 i post-kvantne algoritme u naprednom sigurnosnom dijelu projekta.
+- TLS 1.3 enkripciju.
 
 Trenutna realizacija je podijeljena na manje primjere. Najjednostavniji primjer je komunikacija između `server_basic` i `client_basic` programa. On omogućava da se bez pokretanja cijelog sistema vidi osnovni tok rada: registracija smart metera, slanje mjerenja i potvrda servera.
 
