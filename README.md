@@ -1,4 +1,6 @@
-# Protokol za upravljanje pametnim energetskim mrežama  Smart Grid
+# Protokol za upravljanje pametnim energetskim mrežama - **Smart Grid Management Protocol**
+**Faculty of Electrical Engineering (*Elektrotehnički fakultet Univerziteta u Sarajevu*)** 
+**University of Sarajevo Department of Telecommunications (*Odsjek za telekomunikacije*)**
 
 Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
 
