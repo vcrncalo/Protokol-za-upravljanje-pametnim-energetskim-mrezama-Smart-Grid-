@@ -29,6 +29,12 @@ std::unordered_map<std::string, double> latestPowerByDevice;
 std::mutex powerMutex;
 std::mutex centralSyncMutex;
 
+// Posljednja tarifa koja je stvarno poslana svakom Smart Meteru.
+// Prvi izracun tarife se salje, a nakon toga TARIFF_UPDATE ide
+// samo kada se cijena stvarno promijeni.
+std::unordered_map<std::string, double> lastTariffByDevice;
+std::mutex tariffMutex;
+
 
 std::string getPeerCertificateUri(ssl_socket& socket)
 {
@@ -543,11 +549,21 @@ else
 
                                     double networkLoadKw = totalNetworkLoadKw;
 
-                                    // Pomocna lambda za slanje tarife.
+                                    // Pomocna lambda za obradu dinamicke tarife.
                                     // reductionSuccessful je true samo ako je
                                     // novo mjerenje dokazalo da je snaga <= target.
+                                    //
+                                    // Prvi izracun tarife se salje Smart Meteru.
+                                    // Nakon toga TARIFF_UPDATE se salje samo ako
+                                    // se cijena stvarno promijenila.
+                                    std::string tariffDeviceUri =
+                                        report.device_uri;
+
                                     auto sendTariff =
-                                        [socket, userType, networkLoadKw]
+                                        [socket,
+                                         userType,
+                                         networkLoadKw,
+                                         tariffDeviceUri]
                                         (bool reductionSuccessful)
                                         {
                                             TariffUpdate tariff{};
@@ -559,13 +575,63 @@ else
                                                     reductionSuccessful
                                                 );
 
+                                            bool tariffChanged = false;
+
+                                            {
+                                                std::lock_guard<std::mutex>
+                                                    tariffLock(tariffMutex);
+
+                                                auto it =
+                                                    lastTariffByDevice.find(
+                                                        tariffDeviceUri
+                                                    );
+
+                                                tariffChanged =
+                                                    (it ==
+                                                     lastTariffByDevice.end()) ||
+                                                    (std::fabs(
+                                                        it->second -
+                                                        tariff.price_per_kwh
+                                                     ) > 1e-9);
+                                            }
+
+                                            if (!tariffChanged)
+                                            {
+                                                std::cout
+                                                    << "Tarifa je ostala "
+                                                    << std::fixed
+                                                    << std::setprecision(2)
+                                                    << tariff.price_per_kwh
+                                                    << " KM/kWh - "
+                                                    << "TARIFF_UPDATE se ne salje."
+                                                    << std::endl;
+
+                                                std::cout
+                                                    << "\nNovi ciklus mjerenja - "
+                                                    << "cekam narednih 5 "
+                                                    << "CONSUMPTION_REPORT poruka..."
+                                                    << std::endl;
+
+                                                readConsumptionReport(
+                                                    socket,
+                                                    0,
+                                                    userType
+                                                );
+
+                                                return;
+                                            }
+
                                             database.insertTariff(
                                                 tariff.price_per_kwh
                                             );
 
                                             auto serializedTariff =
-                                                std::make_shared<std::vector<uint8_t>>(
-                                                    serializeTariffUpdate(tariff)
+                                                std::make_shared<
+                                                    std::vector<uint8_t>
+                                                >(
+                                                    serializeTariffUpdate(
+                                                        tariff
+                                                    )
                                                 );
 
                                             double sentPrice =
@@ -573,31 +639,51 @@ else
 
                                             boost::asio::async_write(
                                                 *socket,
-                                                boost::asio::buffer(*serializedTariff),
+                                                boost::asio::buffer(
+                                                    *serializedTariff
+                                                ),
                                                 [socket,
                                                  serializedTariff,
-                                                 sentPrice]
+                                                 sentPrice,
+                                                 tariffDeviceUri,
+                                                 userType]
                                                 (
-                                                    const boost::system::error_code& tariffError,
+                                                    const boost::system::error_code&
+                                                        tariffError,
                                                     std::size_t bytesTransferred
                                                 )
                                                 {
                                                     if (tariffError)
                                                     {
                                                         std::cout
-                                                            << "Greska pri slanju TARIFF_UPDATE: "
+                                                            << "Greska pri slanju "
+                                                            << "TARIFF_UPDATE: "
                                                             << tariffError.message()
                                                             << std::endl;
+
                                                         return;
                                                     }
 
+                                                    {
+                                                        std::lock_guard<std::mutex>
+                                                            tariffLock(
+                                                                tariffMutex
+                                                            );
+
+                                                        lastTariffByDevice[
+                                                            tariffDeviceUri
+                                                        ] = sentPrice;
+                                                    }
+
                                                     std::cout
-                                                        << "TARIFF_UPDATE poslan Smart Meteru."
+                                                        << "TARIFF_UPDATE poslan "
+                                                        << "Smart Meteru."
                                                         << std::endl;
 
                                                     std::cout
                                                         << "Nova cijena: "
-                                                        << std::fixed << std::setprecision(2)
+                                                        << std::fixed
+                                                        << std::setprecision(2)
                                                         << sentPrice
                                                         << " KM/kWh"
                                                         << std::endl;
@@ -606,6 +692,18 @@ else
                                                         << "Poslano bajtova: "
                                                         << bytesTransferred
                                                         << std::endl;
+
+                                                    std::cout
+                                                        << "\nNovi ciklus mjerenja - "
+                                                        << "cekam narednih 5 "
+                                                        << "CONSUMPTION_REPORT poruka..."
+                                                        << std::endl;
+
+                                                    readConsumptionReport(
+                                                        socket,
+                                                        0,
+                                                        userType
+                                                    );
                                                 }
                                             );
                                         };

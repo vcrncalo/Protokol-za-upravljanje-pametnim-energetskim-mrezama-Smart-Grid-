@@ -26,6 +26,8 @@ Database database("database/region1.db");
 std::unordered_map<std::string, double> latestPowerByDevice;
 std::mutex powerMutex;
 std::mutex centralSyncMutex;
+std::unordered_map<std::string, double> lastTariffByDevice;
+std::mutex tariffMutex;
 
 
 std::string getPeerCertificateUri(ssl_socket& socket)
@@ -498,125 +500,194 @@ else
                             );
 
 
-                        // Asinhrono saljemo ACK
-                        boost::asio::async_write(
-                            *socket,
-                            boost::asio::buffer(
-                                *serializedConsumptionAck
-                            ),
+                      // Asinhrono saljemo ACK
+boost::asio::async_write(
+    *socket,
+    boost::asio::buffer(
+        *serializedConsumptionAck
+    ),
 
-                         [socket,
- serializedConsumptionAck,
- reportCount,
- report,
- userType,
- totalNetworkLoadKw]
-                            (
-                                const boost::system::error_code& writeError,
-                                std::size_t bytesTransferred
-                            )
+    [socket,
+     serializedConsumptionAck,
+     reportCount,
+     report,
+     userType,
+     totalNetworkLoadKw]
+    (
+        const boost::system::error_code& writeError,
+        std::size_t bytesTransferred
+    )
+    {
+        if (writeError)
+        {
+            std::cout
+                << "Greska pri slanju CONSUMPTION_ACK: "
+                << writeError.message()
+                << std::endl;
+
+            return;
+        }
+
+        std::cout
+            << "CONSUMPTION_ACK asinhrono poslan."
+            << std::endl;
+
+        std::cout
+            << "Poslano bajtova: "
+            << bytesTransferred
+            << std::endl;
+
+        std::cout
+            << "--------------------------------"
+            << std::endl;
+
+
+        // Nakon ACK-a ponovo cekamo novi report
+        if (reportCount + 1 < 5)
+        {
+            readConsumptionReport(
+                socket,
+                userType,
+                reportCount + 1
+            );
+        }
+        else
+        {
+            std::cout
+                << "Primljeno je 5 CONSUMPTION_REPORT poruka."
+                << std::endl;
+
+            double networkLoadKw = totalNetworkLoadKw;
+
+            // Pomocna lambda za slanje tarife.
+            // reductionSuccessful je true samo ako je
+            // novo mjerenje dokazalo da je snaga <= target.
+            auto sendTariff =
+                [socket, userType, networkLoadKw, report]
+                (bool reductionSuccessful)
+                {
+                    TariffUpdate tariff{};
+
+                    tariff.price_per_kwh =
+                        calculateDynamicTariff(
+                            userType,
+                            networkLoadKw,
+                            reductionSuccessful
+                        );
+                        bool tariffChanged = false;
+
+{
+    std::lock_guard<std::mutex> lock(tariffMutex);
+
+    std::string deviceUri(report.device_uri);
+
+    auto it = lastTariffByDevice.find(deviceUri);
+
+    // Prvi put uvijek saljemo tarifu.
+    if (it == lastTariffByDevice.end())
+    {
+        tariffChanged = true;
+        lastTariffByDevice[deviceUri] =
+            tariff.price_per_kwh;
+    }
+    else if (
+        std::fabs(
+            it->second - tariff.price_per_kwh
+        ) > 0.000001
+    )
+    {
+        tariffChanged = true;
+        it->second = tariff.price_per_kwh;
+    }
+}
+if (!tariffChanged)
+{
+    std::cout
+        << "Tarifa se nije promijenila. "
+        << "TARIFF_UPDATE se ne salje."
+        << std::endl;
+
+    std::cout
+        << "Trenutna cijena ostaje: "
+        << tariff.price_per_kwh
+        << " KM/kWh"
+        << std::endl;
+
+    std::cout
+        << "\nNovi ciklus mjerenja - "
+        << "cekam narednih 5 CONSUMPTION_REPORT poruka..."
+        << std::endl;
+
+    readConsumptionReport(
+        socket,
+        userType,
+        0
+    );
+
+    return;
+}
+
+                    database.insertTariff(
+                        tariff.price_per_kwh
+                    );
+
+                    auto serializedTariff =
+                        std::make_shared<std::vector<uint8_t>>(
+                            serializeTariffUpdate(tariff)
+                        );
+
+                    boost::asio::async_write(
+                        *socket,
+                        boost::asio::buffer(*serializedTariff),
+
+                        [socket,
+                         serializedTariff,
+                         tariff,
+                         userType]
+                        (
+                            const boost::system::error_code& tariffError,
+                            std::size_t bytesTransferred
+                        )
+                        {
+                            if (tariffError)
                             {
-                                if (writeError)
-                                {
-                                    std::cout
-                                        << "Greska pri slanju CONSUMPTION_ACK: "
-                                        << writeError.message()
-                                        << std::endl;
-
-                                    return;
-                                }
-
                                 std::cout
-                                    << "CONSUMPTION_ACK asinhrono poslan."
+                                    << "Greska pri slanju TARIFF_UPDATE: "
+                                    << tariffError.message()
                                     << std::endl;
 
-                                std::cout
-                                    << "Poslano bajtova: "
-                                    << bytesTransferred
-                                    << std::endl;
+                                return;
+                            }
 
-                                std::cout
-                                    << "--------------------------------"
-                                    << std::endl;
+                            std::cout
+                                << "TARIFF_UPDATE poslan Smart Meteru."
+                                << std::endl;
 
+                            std::cout
+                                << "Nova cijena: "
+                                << tariff.price_per_kwh
+                                << " KM/kWh"
+                                << std::endl;
 
-                                // Nakon ACK-a ponovo cekamo novi report
-                                if (reportCount + 1 < 5)
-                                {
-                                    readConsumptionReport(
-                                        socket,
-                                        userType,
-                                        reportCount + 1
-                                    );
-                                }
-                                else
-                                {
-                                    std::cout
-                                        << "Primljeno je 5 CONSUMPTION_REPORT poruka."
-                                        << std::endl;
+                            std::cout
+                                << "Poslano bajtova: "
+                                << bytesTransferred
+                                << std::endl;
 
-                                    double networkLoadKw = totalNetworkLoadKw;
+                            std::cout
+                                << "\nNovi ciklus mjerenja - "
+                                << "cekam narednih 5 CONSUMPTION_REPORT poruka..."
+                                << std::endl;
 
-                                    // Pomocna lambda za slanje tarife.
-                                    // reductionSuccessful je true samo ako je
-                                    // novo mjerenje dokazalo da je snaga <= target.
-                                    auto sendTariff =
-                                        [socket, userType, networkLoadKw]
-                                        (bool reductionSuccessful)
-                                        {
-                                            TariffUpdate tariff{};
-
-                                            tariff.price_per_kwh =
-                                                calculateDynamicTariff(
-                                                    userType,
-                                                    networkLoadKw,
-                                                    reductionSuccessful
-                                                );
-
-                                            database.insertTariff(
-                                                tariff.price_per_kwh
-                                            );
-
-                                            auto serializedTariff =
-                                                std::make_shared<std::vector<uint8_t>>(
-                                                    serializeTariffUpdate(tariff)
-                                                );
-
-                                            boost::asio::async_write(
-                                                *socket,
-                                                boost::asio::buffer(*serializedTariff),
-                                                [socket, serializedTariff, tariff]
-                                                (
-                                                    const boost::system::error_code& tariffError,
-                                                    std::size_t bytesTransferred
-                                                )
-                                                {
-                                                    if (tariffError)
-                                                    {
-                                                        std::cout
-                                                            << "Greska pri slanju TARIFF_UPDATE: "
-                                                            << tariffError.message()
-                                                            << std::endl;
-                                                        return;
-                                                    }
-
-                                                    std::cout
-                                                        << "TARIFF_UPDATE poslan Smart Meteru."
-                                                        << std::endl;
-
-                                                    std::cout
-                                                        << "Nova cijena: "
-                                                        << tariff.price_per_kwh
-                                                        << " KM/kWh"
-                                                        << std::endl;
-
-                                                    std::cout
-                                                        << "Poslano bajtova: "
-                                                        << bytesTransferred
-                                                        << std::endl;
-                                                }
-                                            );
-                                        };
+                            // Nakon tarife pocinje novi ciklus.
+                            readConsumptionReport(
+                                socket,
+                                userType,
+                                0
+                            );
+                        }
+                    );
+                };
 
                                     // REDUCE komandu saljemo samo tokom visokog
                                     // regionalnog opterecenja.

@@ -12,9 +12,53 @@
 #include <string>
 #include <random>
 #include <cmath>
+#include <sys/select.h>
 
 using boost::asio::ip::tcp;
 namespace ssl = boost::asio::ssl;
+
+// Ceka kratko da provjeri da li je regionalni server poslao
+// REDUCE_CONSUMPTION_CMD ili stvarno promijenjenu TARIFF_UPDATE poruku.
+// Ako nema poruke, Smart Meter nastavlja novi ciklus mjerenja.
+bool waitForTlsData(
+    ssl::stream<tcp::socket>& socket,
+    int timeoutMilliseconds)
+{
+    // Ako OpenSSL vec ima dekriptovanih podataka u internom bufferu,
+    // nema potrebe cekati TCP socket.
+    if (SSL_pending(socket.native_handle()) > 0)
+    {
+        return true;
+    }
+
+    int socketFd = socket.next_layer().native_handle();
+
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(socketFd, &readSet);
+
+    timeval timeout{};
+    timeout.tv_sec = timeoutMilliseconds / 1000;
+    timeout.tv_usec =
+        (timeoutMilliseconds % 1000) * 1000;
+
+    int result = select(
+        socketFd + 1,
+        &readSet,
+        nullptr,
+        nullptr,
+        &timeout
+    );
+
+    if (result < 0)
+    {
+        throw std::runtime_error(
+            "Greska pri cekanju odgovora regionalnog servera."
+        );
+    }
+
+    return result > 0;
+}
 
 int main(int argc, char* argv[])
 {
@@ -366,7 +410,23 @@ std::uniform_real_distribution<double> powerDist(
     request.user_type == 1 ? 0.5 : 5.0,
     request.user_type == 1 ? 3.0 : 15.0
 );
+std::cout
+    << "\nSmart Meter je aktivan."
+    << std::endl;
 
+std::cout
+    << "Mjerenja se salju kontinuirano svakih 5 sekundi."
+    << std::endl;
+
+std::cout
+    << "Za prekid rada pritisni Ctrl+C."
+    << std::endl;
+
+// Smart Meter radi kontinuirano.
+// Svakih 5 regularnih mjerenja server procjenjuje
+// stanje mreze i salje tarifu ili REDUCE komandu.
+while (true)
+{
 
                 // ==========================================
                 // SALJEMO 5 CONSUMPTION_REPORT PORUKA
@@ -529,20 +589,34 @@ report.current_power_kw =
                     }
 
 
-                    std::this_thread::sleep_for(
-                        std::chrono::seconds(5)
-                    );
+                    // Izmedju regularnih mjerenja cekamo 5 sekundi.
+// Nakon petog mjerenja odmah cekamo odgovor servera.
+if (i < 4)
+{
+    std::this_thread::sleep_for(
+        std::chrono::seconds(5)
+    );
+}
                 }
 
 
-                // ==========================================
-                // CEKANJE KOMANDE OD SERVERA
-                // ==========================================
-
                 std::cout
-                    << "Cekam komandu od regionalnog servera..."
+                    << "Zavrsen ciklus od 5 mjerenja. "
+                    << "Provjeravam odgovor regionalnog servera..."
                     << std::endl;
 
+                // Server salje poruku samo ako treba poslati REDUCE
+                // ili ako se tarifa stvarno promijenila.
+                // Ako nema poruke, nastavljamo novi ciklus bez blokiranja.
+                if (!waitForTlsData(socket, 2000))
+                {
+                    std::cout
+                        << "Nema REDUCE komande i tarifa se nije promijenila. "
+                        << "Nastavljam novi ciklus mjerenja."
+                        << std::endl;
+
+                    continue;
+                }
 
                 std::vector<uint8_t> commandHeader(4);
 
@@ -819,80 +893,89 @@ report.current_power_kw =
                             << "Ocekivan CONSUMPTION_ACK nakon smanjenja."
                             << std::endl;
                     }
-                        // ==========================================
-// CEKANJE TARIFF_UPDATE PORUKE
-// ==========================================
+                    // ==========================================
+                    // PROVJERA TARIFF_UPDATE NAKON REDUCE KOMANDE
+                    // ==========================================
 
-std::cout
-    << "Cekam TARIFF_UPDATE od servera..."
-    << std::endl;
+                    // Nakon REDUCE komande tarifa se salje samo ako se
+                    // stvarno promijenila. Ako nema nove tarife, server
+                    // odmah prelazi na naredni ciklus mjerenja.
+                    if (waitForTlsData(socket, 2000))
+                    {
+                        std::vector<uint8_t> tariffHeader(4);
 
-std::vector<uint8_t> tariffHeader(4);
+                        boost::asio::read(
+                            socket,
+                            boost::asio::buffer(tariffHeader)
+                        );
 
-boost::asio::read(
-    socket,
-    boost::asio::buffer(tariffHeader)
-);
+                        uint16_t tariffPayloadLengthNetwork;
 
-uint16_t tariffPayloadLengthNetwork;
+                        std::memcpy(
+                            &tariffPayloadLengthNetwork,
+                            tariffHeader.data() + 2,
+                            sizeof(tariffPayloadLengthNetwork)
+                        );
 
-std::memcpy(
-    &tariffPayloadLengthNetwork,
-    tariffHeader.data() + 2,
-    sizeof(tariffPayloadLengthNetwork)
-);
+                        uint16_t tariffPayloadLength =
+                            ntohs(tariffPayloadLengthNetwork);
 
-uint16_t tariffPayloadLength =
-    ntohs(tariffPayloadLengthNetwork);
+                        std::vector<uint8_t> tariffPayload(
+                            tariffPayloadLength
+                        );
 
-std::vector<uint8_t> tariffPayload(
-    tariffPayloadLength
-);
+                        boost::asio::read(
+                            socket,
+                            boost::asio::buffer(tariffPayload)
+                        );
 
-boost::asio::read(
-    socket,
-    boost::asio::buffer(tariffPayload)
-);
+                        std::vector<uint8_t> fullTariff;
 
-std::vector<uint8_t> fullTariff;
+                        fullTariff.insert(
+                            fullTariff.end(),
+                            tariffHeader.begin(),
+                            tariffHeader.end()
+                        );
 
-fullTariff.insert(
-    fullTariff.end(),
-    tariffHeader.begin(),
-    tariffHeader.end()
-);
+                        fullTariff.insert(
+                            fullTariff.end(),
+                            tariffPayload.begin(),
+                            tariffPayload.end()
+                        );
 
-fullTariff.insert(
-    fullTariff.end(),
-    tariffPayload.begin(),
-    tariffPayload.end()
-);
+                        if (tariffHeader[1] ==
+                            static_cast<uint8_t>(
+                                MessageType::TARIFF_UPDATE))
+                        {
+                            TariffUpdate tariff =
+                                deserializeTariffUpdate(
+                                    fullTariff
+                                );
 
-if (tariffHeader[1] ==
-    static_cast<uint8_t>(
-        MessageType::TARIFF_UPDATE))
-{
-    TariffUpdate tariff =
-        deserializeTariffUpdate(
-            fullTariff
-        );
+                            std::cout
+                                << "TARIFF_UPDATE primljen."
+                                << std::endl;
 
-    std::cout
-        << "TARIFF_UPDATE primljen."
-        << std::endl;
-
-    std::cout
-        << "Nova cijena elektricne energije: "
-        << tariff.price_per_kwh
-        << " KM/kWh"
-        << std::endl;
-}
-else
-{
-    std::cout
-        << "Primljena poruka nije TARIFF_UPDATE."
-        << std::endl;
-}
+                            std::cout
+                                << "Nova cijena elektricne energije: "
+                                << tariff.price_per_kwh
+                                << " KM/kWh"
+                                << std::endl;
+                        }
+                        else
+                        {
+                            std::cout
+                                << "Primljena poruka nakon REDUCE nije TARIFF_UPDATE."
+                                << std::endl;
+                        }
+                    }
+                    else
+                    {
+                        std::cout
+                            << "Tarifa se nakon REDUCE komande nije promijenila. "
+                            << "Nastavljam novi ciklus mjerenja."
+                            << std::endl;
+                    }
                 }
                 else if (commandHeader[1] ==
                     static_cast<uint8_t>(
@@ -920,6 +1003,7 @@ else
                     std::cout
                         << "Primljena neocekivana poruka od regionalnog servera."
                         << std::endl;
+                }
                 }
             }
             else
