@@ -137,19 +137,6 @@ g++ --version
 cmake --version
 ```
 
-Za brzu provjeru Boost.Asio okruženja kompajlirajte najjednostavniji program iz ovog repozitorija:
-
-```bash
-g++ -std=c++17 main.cpp -o smartgrid_demo
-./smartgrid_demo
-```
-
-Ako je podešavanje uspješno, program će ispisati:
-
-```text
-Smart Grid projekat radi!
-```
-
 ### Korak 4: Standalone Asio biblioteka
 
 Standalone Asio se može preuzeti i iz zasebnog repozitorija:
