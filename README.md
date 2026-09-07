@@ -35,9 +35,9 @@ Projekat je napisan u jeziku C++ i koristi:
 - vlastiti binarni protokol definisan u `protocol/smart_grid_protocol.hpp`,
 - **TLS 1.3 + PQC** za kvantno-sigurnu komunikaciju između uređaja i servera.
 
-### Kvantno-sigurna komunikacija
+### Kvantno-sigurna komunikacija (*Quantum-safe communication*)
 
-Za zaštićenu komunikaciju koristi se TLS 1.3 u kombinaciji sa post-kvantnom kriptografijom (PQC). TLS obezbjeđuje šifrovan i autentifikovan kanal, dok PQC mehanizmi pružaju zaštitu od napada budućih kvantnih računara. U konfiguraciji projekta koriste se hibridna grupa `X25519MLKEM768` za razmjenu ključeva i post-kvantni potpis `ML-DSA-44` za autentifikaciju.
+Za zaštićenu komunikaciju koristi se TLS 1.3 u kombinaciji sa post-kvantnom kriptografijom (PQC). TLS obezbjeđuje šifrovan i autentifikovan kanal, dok PQC mehanizmi pružaju zaštitu od napada.
 
 Ovaj dio zahtijeva OpenSSL verziju koja podržava navedene algoritme. Osnovni TCP, UDP i SQLite primjeri mogu se koristiti i bez PQC podrške.
 
