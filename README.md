@@ -1,5 +1,6 @@
 # Protokol za upravljanje pametnim energetskim mrežama - **Smart Grid Management Protocol**
 **Faculty of Electrical Engineering (*Elektrotehnički fakultet Univerziteta u Sarajevu*)** 
+
 **University of Sarajevo Department of Telecommunications (*Odsjek za telekomunikacije*)**
 
 Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
@@ -21,7 +22,7 @@ Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energet
   - historije potrošnje i fakturisanja.
 - Regionalni sistem sa najmanje dva odvojena servera (npr. Sarajevo i Mostar) uz sinhronizaciju podataka u realnom vremenu.
 - Alarmni sistem za neovlašten pristup ili neuobičajene vrijednosti potrošnje.
-- Sva signalizacija ide preko servera; direktna komunikacija između mjernih uređaja nije dozvoljena.
+- Sva signalizacija ide preko servera
 
 ## O projektu
 
@@ -32,7 +33,13 @@ Projekat je napisan u jeziku C++ i koristi:
 - **Boost.Asio** za TCP i UDP mrežnu komunikaciju,
 - **SQLite** za lokalno čuvanje uređaja, mjerenja, alarma i sinhronizacija,
 - vlastiti binarni protokol definisan u `protocol/smart_grid_protocol.hpp`,
-- TLS 1.3 enkripciju.
+- **TLS 1.3 + PQC** za kvantno-sigurnu komunikaciju između uređaja i servera.
+
+### Kvantno-sigurna komunikacija
+
+Za zaštićenu komunikaciju koristi se TLS 1.3 u kombinaciji sa post-kvantnom kriptografijom (PQC). TLS obezbjeđuje šifrovan i autentifikovan kanal, dok PQC mehanizmi pružaju zaštitu od napada budućih kvantnih računara. U konfiguraciji projekta koriste se hibridna grupa `X25519MLKEM768` za razmjenu ključeva i post-kvantni potpis `ML-DSA-44` za autentifikaciju.
+
+Ovaj dio zahtijeva OpenSSL verziju koja podržava navedene algoritme. Osnovni TCP, UDP i SQLite primjeri mogu se koristiti i bez PQC podrške.
 
 Trenutna realizacija je podijeljena na manje primjere. Najjednostavniji primjer je komunikacija između `server_basic` i `client_basic` programa. On omogućava da se bez pokretanja cijelog sistema vidi osnovni tok rada: registracija smart metera, slanje mjerenja i potvrda servera.
 
@@ -57,6 +64,27 @@ Svaka poruka počinje zaglavljem od 4 bajta:
 
 Podaci su serijalizovani u mrežni redoslijed bajtova, a funkcije za serijalizaciju i deserijalizaciju nalaze se u protokolskom headeru.
 
+## Tabela protokolskih poruka
+
+Svaka poruka ima zaglavlje od 4 bajta: verziju protokola, tip poruke i dužinu payload-a. Vrijednosti `kWh` predstavljaju energiju, a `kW` trenutnu snagu.
+
+| Tip poruke | Smjer | Svrha | Glavni podaci |
+| --- | --- | --- | --- |
+| `REGISTER_REQ` | smart meter -> regionalni server | Zahtjev za registraciju uređaja | URI uređaja, region, tip korisnika |
+| `REGISTER_ACK` | regionalni server -> smart meter | Potvrda ili odbijanje registracije | status |
+| `CONSUMPTION_REPORT` | smart meter -> regionalni server | Slanje izmjerene potrošnje | URI, vrijeme, kWh, kW |
+| `CONSUMPTION_ACK` | regionalni server -> smart meter | Potvrda prijema mjerenja | status |
+| `TARIFF_UPDATE` | regionalni server -> smart meter | Slanje nove cijene električne energije | cijena po kWh |
+| `REDUCE_CONSUMPTION_CMD` | regionalni server -> smart meter | Zahtjev za smanjenje opterećenja | URI, ciljna snaga u kW |
+| `COMMAND_ACK` | smart meter -> regionalni server | Potvrda izvršavanja komande | status |
+| `HEARTBEAT` | smart meter -> regionalni server | Provjera da je uređaj aktivan | URI, vrijeme slanja |
+| `ALARM` | uređaj/server -> server | Signalizacija neuobičajenog stanja ili pristupa | Tip i sadržaj zavise od obrade događaja |
+| `DATA_STREAM_SAMPLE` | smart meter -> regionalni server | Kontinuirani tok uzoraka potrošnje | URI, vrijeme, redni broj, kWh, kW |
+| `REGION_SYNC` | regionalni server -> centralni server | Sinhronizacija mjerenja između regija | izvorni region, URI, vrijeme, kWh, kW |
+| `REGION_SYNC_ACK` | centralni server -> regionalni server | Potvrda regionalne sinhronizacije | status |
+
+Status je bajt koji server ili uređaj koristi da označi uspjeh ili neuspjeh operacije. Poruke `DATA_STREAM_SAMPLE` nemaju zaseban ACK za svaki uzorak; nastavak rada protokola potvrđuje se narednim odgovorom, najčešće `CONSUMPTION_ACK`.
+
 ## Struktura repozitorija
 
 ```text
@@ -65,7 +93,7 @@ Podaci su serijalizovani u mrežni redoslijed bajtova, a funkcije za serijalizac
 ├── smart_meter/    TCP i UDP klijenti koji predstavljaju smart meter uređaje
 ├── regional/       Regionalni serveri, registar uređaja i heartbeat
 ├── central/        Centralni server i sinhronizacija regionalnih podataka
-├── database/       SQLite omotač i primjer upisa/čitanja podataka
+├── database/       SQLite klasa i primjer upisa/čitanja podataka
 ├── security/       TLS 1.3 i PQC konfiguracija
 ├── certs/          Konfiguracije certifikata za servere i uređaje
 └── web_monitoring/ Jednostavni web server za pregled agregiranih podataka
@@ -139,28 +167,9 @@ g++ --version
 cmake --version
 ```
 
-### Korak 4: Standalone Asio biblioteka
+### Korak 4: Napomena o Asio biblioteci
 
-Standalone Asio se može preuzeti i iz zasebnog repozitorija:
-
-```bash
-git clone https://github.com/chriskohlhoff/asio.git
-cd asio
-git submodule update --init --recursive
-```
-
-Međutim, standalone Asio koristi include putanju `asio.hpp` i namespace `asio`, dok ovaj projekat koristi `boost/asio.hpp` i `boost::asio`. Zbog toga standalone Asio nije zamjena za Boost instalaciju bez dodatne izmjene izvornog koda.
-
-Ako se standalone Asio koristi u posebnom projektu koji je za to pripremljen, izgradnja se može izvršiti ovako:
-
-```bash
-mkdir build
-cd build
-cmake ..
-cmake --build .
-```
-
-Za ovaj Smart Grid projekat preporučuje se da se koristi Boost instalacija iz prethodnih koraka.
+Ovaj projekat koristi Boost.Asio, a ne standalone Asio. To se vidi po include putanji `boost/asio.hpp` i namespace-u `boost::asio`. Zbog toga je potrebna Boost instalacija iz prethodnog koraka; preuzimanje standalone Asio biblioteke nije potrebno.
 
 ## Najjednostavniji primjer: server i smart meter
 
@@ -211,6 +220,52 @@ g++ -std=c++17 database/database_test.cpp -o database/database_test -lsqlite3
 ```
 
 Test koristi bazu `database/smartgrid.db`, registruje uređaj `smartgrid://sarajevo/meter/001` i ispisuje dostupne podatke. Baza se kreira automatski ako ne postoji.
+
+## Funkcionalni testovi
+
+Skripte u direktoriju `tests/` provjeravaju funkcionalne tokove sistema. Pokreću se iz glavnog direktorija repozitorija i očekuju već izgrađene izvršne datoteke. Za rad u Linuxu ili WSL-u prvo omogućite izvršavanje skripti:
+
+```bash
+chmod +x tests/*.sh
+```
+
+Testovi koji koriste TLS i regionalnu sinhronizaciju zahtijevaju pokrenute odgovarajuće servere, na primjer:
+
+```bash
+./central/sync_server
+./regional/server_async
+```
+
+U drugom terminalu pojedinačni test pokreće se ovako:
+
+```bash
+./tests/test_01_region1_registration.sh
+```
+
+| Test | Šta provjerava | Očekivani rezultat |
+| --- | --- | --- |
+| `test_01_region1_registration.sh` | TLS 1.3/PQC handshake i registraciju uređaja `sarajevo/meter/001` | uređaj je registrovan u Regionu 1 |
+| `test_02_region2_registration.sh` | Registraciju uređaja `mostar/meter/002` | uređaj je registrovan u Regionu 2 |
+| `test_03_invalid_uri.sh` | Odbijanje namjerno neispravnog uređaja `mostar/meter/999` | registracija je odbijena |
+| `test_04_consumption_sync.sh` | `CONSUMPTION_REPORT`, `CONSUMPTION_ACK` i `REGION_SYNC` | novi zapis postoji u `database/central.db` |
+| `test_05_dynamic_tariff.sh` | Više mjerenja i izračun dinamičke tarife | primljena je `TARIFF_UPDATE` poruka |
+| `test_06_reduce_command.sh` | Reakciju industrijskog uređaja na veliko opterećenje | primljene su `REDUCE_CONSUMPTION_CMD` i `COMMAND_ACK` poruke |
+| `test_07_data_stream.sh` | Kontinuirano slanje uzoraka | primljena su najmanje tri `DATA_STREAM_SAMPLE` uzorka |
+
+Testovi upisuju detaljan izlaz u `tests/test_0X_output.log`. Vrijeme trajanja zavisi od timeouta u skripti i od toga koliko brzo server odgovara.
+
+## Benchmark testovi
+
+Benchmark programi nalaze se u `tests/benchmark/` i služe za mjerenje performansi, a ne za provjeru osnovne funkcionalnosti. Trenutno postoje:
+
+| Benchmark | Mjerenje |
+| --- | --- |
+| `database_benchmark.cpp` | SQLite INSERT/SELECT operacije u memorijskoj bazi |
+| `registration_benchmark.cpp` | TCP povezivanje, PQC TLS handshake i registracija |
+| `consumption_rtt_benchmark.cpp` | RTT od `CONSUMPTION_REPORT` do `CONSUMPTION_ACK` |
+| `data_stream_benchmark.cpp` | Propusnost toka `DATA_STREAM_SAMPLE` poruka |
+
+Detaljne komande za kompajliranje i pokretanje benchmarka nalaze se u [tests/benchmark/README.md](tests/benchmark/README.md).
 
 ## UDP heartbeat
 
