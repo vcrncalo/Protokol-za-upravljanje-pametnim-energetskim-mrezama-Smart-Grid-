@@ -1189,10 +1189,62 @@ else
                             }
                         );
                     }
+                    else if (consumptionType ==
+                        static_cast<uint8_t>(
+                            MessageType::DATA_STREAM_SAMPLE))
+                    {
+                        DataStreamSample sample =
+                            deserializeDataStreamSample(
+                                fullConsumptionMessage
+                            );
+
+                        std::cout
+                            << "\n=== DATA-STREAM SAMPLE ==="
+                            << std::endl;
+
+                        std::cout
+                            << "URI: "
+                            << sample.device_uri
+                            << std::endl;
+
+                        std::cout
+                            << "Sequence: "
+                            << sample.sequence_number
+                            << std::endl;
+
+                        std::cout
+                            << "Timestamp: "
+                            << sample.timestamp
+                            << std::endl;
+
+                        std::cout
+                            << "Potrosnja: "
+                            << sample.consumption_kwh
+                            << " kWh"
+                            << std::endl;
+
+                        std::cout
+                            << "Trenutna snaga: "
+                            << sample.current_power_kw
+                            << " kW"
+                            << std::endl;
+
+                        std::cout
+                            << "=========================="
+                            << std::endl;
+
+                        // DATA_STREAM_SAMPLE se ne broji kao regularni report
+                        // i ne pokrece tarifu/REDUCE. Odmah cekamo novu poruku.
+                        readConsumptionReport(
+                            socket,
+                            reportCount,
+                            userType
+                        );
+                    }
                     else
                     {
                         std::cout
-                            << "Ocekivan CONSUMPTION_REPORT, "
+                            << "Ocekivan CONSUMPTION_REPORT ili DATA_STREAM_SAMPLE, "
                             << "ali je primljen drugi tip poruke."
                             << std::endl;
                     }

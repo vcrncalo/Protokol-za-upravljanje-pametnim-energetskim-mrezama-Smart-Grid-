@@ -24,6 +24,8 @@ enum class MessageType : uint8_t
 
     HEARTBEAT = 0x08,
     ALARM = 0x09,
+    
+    DATA_STREAM_SAMPLE = 0x0A,
 
     REGION_SYNC = 0x20,
     REGION_SYNC_ACK = 0x21
@@ -35,6 +37,138 @@ struct MessageHeader
     uint8_t type;
     uint16_t payload_length;
 };
+struct DataStreamSample
+{
+    char device_uri[64];
+    uint64_t timestamp;
+    uint32_t sequence_number;
+    double consumption_kwh;
+    double current_power_kw;
+};
+
+inline std::vector<uint8_t> serializeDataStreamSample(
+    const DataStreamSample& sample)
+{
+    std::vector<uint8_t> buffer;
+
+    MessageHeader header{};
+    header.version = 1;
+    header.type =
+        static_cast<uint8_t>(
+            MessageType::DATA_STREAM_SAMPLE
+        );
+
+    uint16_t payloadSize =
+        sizeof(sample.device_uri) +
+        sizeof(sample.timestamp) +
+        sizeof(sample.sequence_number) +
+        sizeof(sample.consumption_kwh) +
+        sizeof(sample.current_power_kw);
+
+    header.payload_length = htons(payloadSize);
+
+    buffer.push_back(header.version);
+    buffer.push_back(header.type);
+
+    uint8_t* lengthPtr =
+        reinterpret_cast<uint8_t*>(&header.payload_length);
+
+    buffer.push_back(lengthPtr[0]);
+    buffer.push_back(lengthPtr[1]);
+
+    buffer.insert(
+        buffer.end(),
+        sample.device_uri,
+        sample.device_uri + sizeof(sample.device_uri)
+    );
+
+    uint64_t timestampNetwork = htobe64(sample.timestamp);
+    uint8_t* timestampPtr =
+        reinterpret_cast<uint8_t*>(&timestampNetwork);
+
+    buffer.insert(
+        buffer.end(),
+        timestampPtr,
+        timestampPtr + sizeof(timestampNetwork)
+    );
+
+    uint32_t sequenceNetwork = htonl(sample.sequence_number);
+    uint8_t* sequencePtr =
+        reinterpret_cast<uint8_t*>(&sequenceNetwork);
+
+    buffer.insert(
+        buffer.end(),
+        sequencePtr,
+        sequencePtr + sizeof(sequenceNetwork)
+    );
+
+    const uint8_t* consumptionPtr =
+        reinterpret_cast<const uint8_t*>(&sample.consumption_kwh);
+
+    buffer.insert(
+        buffer.end(),
+        consumptionPtr,
+        consumptionPtr + sizeof(sample.consumption_kwh)
+    );
+
+    const uint8_t* powerPtr =
+        reinterpret_cast<const uint8_t*>(&sample.current_power_kw);
+
+    buffer.insert(
+        buffer.end(),
+        powerPtr,
+        powerPtr + sizeof(sample.current_power_kw)
+    );
+
+    return buffer;
+}
+
+inline DataStreamSample deserializeDataStreamSample(
+    const std::vector<uint8_t>& buffer)
+{
+    DataStreamSample sample{};
+    std::size_t offset = 4;
+
+    std::memcpy(
+        sample.device_uri,
+        buffer.data() + offset,
+        sizeof(sample.device_uri)
+    );
+    offset += sizeof(sample.device_uri);
+
+    uint64_t timestampNetwork;
+    std::memcpy(
+        &timestampNetwork,
+        buffer.data() + offset,
+        sizeof(timestampNetwork)
+    );
+    sample.timestamp = be64toh(timestampNetwork);
+    offset += sizeof(timestampNetwork);
+
+    uint32_t sequenceNetwork;
+    std::memcpy(
+        &sequenceNetwork,
+        buffer.data() + offset,
+        sizeof(sequenceNetwork)
+    );
+    sample.sequence_number = ntohl(sequenceNetwork);
+    offset += sizeof(sequenceNetwork);
+
+    std::memcpy(
+        &sample.consumption_kwh,
+        buffer.data() + offset,
+        sizeof(sample.consumption_kwh)
+    );
+    offset += sizeof(sample.consumption_kwh);
+
+    std::memcpy(
+        &sample.current_power_kw,
+        buffer.data() + offset,
+        sizeof(sample.current_power_kw)
+    );
+
+    return sample;
+}
 
 struct RegisterRequest
 {

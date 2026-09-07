@@ -425,6 +425,10 @@ std::cout
 // Smart Meter radi kontinuirano.
 // Svakih 5 regularnih mjerenja server procjenjuje
 // stanje mreze i salje tarifu ili REDUCE komandu.
+// DATA_STREAM_SAMPLE ima nezavisan redni broj i ne ulazi
+// u brojanje 5 regularnih CONSUMPTION_REPORT poruka.
+uint32_t dataStreamSequence = 0;
+
 while (true)
 {
 
@@ -459,6 +463,44 @@ while (true)
 
 report.current_power_kw =
     std::round(powerDist(generator) * 100.0) / 100.0;
+
+
+                    // ==========================================
+                    // DATA-STREAM SAMPLE
+                    // ==========================================
+                    // Jedan strukturirani uzorak kontinuiranog toka
+                    // mjerenja. Server ga prima bez ACK-a i on ne ulazi
+                    // u brojanje 5 CONSUMPTION_REPORT poruka.
+                    DataStreamSample streamSample{};
+
+                    std::strncpy(
+                        streamSample.device_uri,
+                        deviceUri.c_str(),
+                        sizeof(streamSample.device_uri) - 1
+                    );
+
+                    streamSample.device_uri[
+                        sizeof(streamSample.device_uri) - 1
+                    ] = '\0';
+
+                    streamSample.timestamp = report.timestamp;
+                    streamSample.sequence_number = ++dataStreamSequence;
+                    streamSample.consumption_kwh = report.consumption_kwh;
+                    streamSample.current_power_kw = report.current_power_kw;
+
+                    std::vector<uint8_t> serializedStreamSample =
+                        serializeDataStreamSample(streamSample);
+
+                    boost::asio::write(
+                        socket,
+                        boost::asio::buffer(serializedStreamSample)
+                    );
+
+                    std::cout
+                        << "DATA_STREAM_SAMPLE #"
+                        << streamSample.sequence_number
+                        << " poslan."
+                        << std::endl;
 
 
                     std::cout
