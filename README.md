@@ -14,7 +14,7 @@ Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energet
   - posebne cijene za industrijske i domaće korisnike,
   - popusti za smanjenu potrošnju u periodima vršnog opterećenja.
 - Agregacija podataka i analiza potrošnje po regionima.
-- Dvosmjerna komunikacija: server može poslati komandu za privremeno isključenje potrošača pri preopterećenju.
+- Dvosmjerna komunikacija: regionalni server može poslati naredbu za smanjenje potrošnje (`REDUCE_CONSUMPTION_CMD`) pri povećanom opterećenju mreže, a Smart Meter potvrđuje izvršenje porukom `COMMAND_ACK`.
 - Praćenje trenutne potrošnje i troška kroz web ili mobilnu aplikaciju.
 - Vođenje registra:
   - aktivnih mjernih uređaja,
@@ -64,6 +64,12 @@ Svaka poruka počinje zaglavljem od 4 bajta:
 
 Podaci su serijalizovani u mrežni redoslijed bajtova, a funkcije za serijalizaciju i deserijalizaciju nalaze se u protokolskom headeru.
 
+### Byte stream i data stream
+
+**Byte stream** je kontinuirani niz bajta koji se prenosi preko TCP/TLS veze. U ovom projektu poruke se šalju kao serijalizovani bajti, a 4byte zaglavlje omogućava serveru da prepozna tip poruke i dužinu njenog payload-a.
+
+**Data stream** je aplikacijski tok uzoraka potrošnje predstavljen porukama `DATA_STREAM_SAMPLE`. Smart meter ih šalje kontinuirano, sa URI adresom, vremenom, rednim brojem, potrošnjom i trenutnom snagom; server ih obrađuje bez zasebnog ACK-a za svaki uzorak.
+
 ## Tabela protokolskih poruka
 
 Svaka poruka ima zaglavlje od 4 bajta: verziju protokola, tip poruke i dužinu payload-a. Vrijednosti `kWh` predstavljaju energiju, a `kW` trenutnu snagu.
@@ -78,7 +84,7 @@ Svaka poruka ima zaglavlje od 4 bajta: verziju protokola, tip poruke i dužinu p
 | `REDUCE_CONSUMPTION_CMD` | regionalni server -> smart meter | Zahtjev za smanjenje opterećenja | URI, ciljna snaga u kW |
 | `COMMAND_ACK` | smart meter -> regionalni server | Potvrda izvršavanja komande | status |
 | `HEARTBEAT` | smart meter -> regionalni server | Provjera da je uređaj aktivan | URI, vrijeme slanja |
-| `ALARM` | uređaj/server -> server | Signalizacija neuobičajenog stanja ili pristupa | Tip i sadržaj zavise od obrade događaja |
+| `DEVICE_OFFLINE` | uređaj/server -> server | Signalizacija neuobičajenog stanja ili pristupa | Alarm kada Smart Meter prestane slati UDP heartbeat poruke |
 | `DATA_STREAM_SAMPLE` | smart meter -> regionalni server | Kontinuirani tok uzoraka potrošnje | URI, vrijeme, redni broj, kWh, kW |
 | `REGION_SYNC` | regionalni server -> centralni server | Sinhronizacija mjerenja između regija | izvorni region, URI, vrijeme, kWh, kW |
 | `REGION_SYNC_ACK` | centralni server -> regionalni server | Potvrda regionalne sinhronizacije | status |
@@ -96,6 +102,9 @@ Status je bajt koji server ili uređaj koristi da označi uspjeh ili neuspjeh op
 ├── database/       SQLite klasa i primjer upisa/čitanja podataka
 ├── security/       TLS 1.3 i PQC konfiguracija
 ├── certs/          Konfiguracije certifikata za servere i uređaje
+│   └── pqc/        PQC konfiguracije certifikata
+├── tests/          Funkcionalni testovi sistema
+│   └── benchmark/  Benchmark za mjerenje performansi
 └── web_monitoring/ Jednostavni web server za pregled agregiranih podataka
 ```
 
@@ -176,8 +185,8 @@ Ovaj projekat koristi Boost.Asio, a ne standalone Asio. To se vidi po include pu
 Komande se izvršavaju iz glavnog direktorija repozitorija. Prvo se kompajliraju server i klijent:
 
 ```bash
-g++ -std=c++17 regional/server_basic.cpp -o regional/server_basic -lboost_system -pthread
-g++ -std=c++17 smart_meter/client_basic.cpp -o smart_meter/client_basic -lboost_system -pthread
+g++ regional/server_basic.cpp -o regional/server_basic -lboost_system -pthread
+g++ smart_meter/client_basic.cpp -o smart_meter/client_basic -lboost_system -pthread
 ```
 
 Otvorite dva terminala. U prvom pokrenete server:
@@ -274,8 +283,8 @@ Heartbeat služi za provjeru da li je smart meter aktivan. Server prati vrijeme 
 Za kompilaciju heartbeat primjera:
 
 ```bash
-g++ -std=c++17 regional/udp_heartbeat_server.cpp -o regional/udp_heartbeat_server -lboost_system -lsqlite3 -pthread
-g++ -std=c++17 smart_meter/udp_heartbeat_client.cpp -o smart_meter/udp_heartbeat_client -lboost_system -pthread
+g++ regional/udp_heartbeat_server.cpp -o regional/udp_heartbeat_server -lboost_system -lsqlite3 -pthread
+g++ smart_meter/udp_heartbeat_client.cpp -o smart_meter/udp_heartbeat_client -lboost_system -pthread
 ```
 
 Heartbeat server koristi UDP port `5002`. Server i klijent se pokreću u odvojenim terminalima:
@@ -296,6 +305,6 @@ Ovaj dio koristi certifikate iz direktorija `certs/` i TLS konfiguraciju iz `sec
 Web server čita agregirane podatke iz baze `database/central.db` i prikazuje ih u jednostavnom web interfejsu. Može se pokrenuti zasebno:
 
 ```bash
-g++ -std=c++17 web_monitoring/server.cpp -o web_monitoring/server -lboost_system -lsqlite3 -pthread
+g++ web_monitoring/server.cpp -o web_monitoring/server -lboost_system -lsqlite3 -pthread
 ./web_monitoring/server
 ```
