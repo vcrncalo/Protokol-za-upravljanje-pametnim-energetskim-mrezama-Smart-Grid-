@@ -66,7 +66,7 @@ int main(int argc, char* argv[])
 {
     std::cout
         << "Koristenje: ./client_async_test "
-        << "<grad> <meter_id> <tip_korisnika>"
+        << "<grad> <meter_id> <tip_korisnika> [regional_server_ip]"
         << std::endl;
 
     std::cout
@@ -79,6 +79,16 @@ int main(int argc, char* argv[])
 std::string city = argv[1];
 std::string meterId = argv[2];
 std::string userType = argv[3];
+
+// Ako IP/adresa regionalnog servera nije navedena,
+// zadrzava se dosadasnje lokalno ponasanje.
+std::string regionalHost =
+    (argc >= 5) ? argv[4] : "127.0.0.1";
+
+std::cout
+    << "Regional Server adresa: "
+    << regionalHost
+    << std::endl;
 
 
 // ==========================================
@@ -170,11 +180,11 @@ clientKeyPath = "certs/pqc/meter002.key";
 
         tcp::resolver resolver(io);
 
-        auto endpoints =
-            resolver.resolve(
-                "127.0.0.1",
-                port
-            );
+       auto endpoints =
+    resolver.resolve(
+        regionalHost,
+        port
+    );
 
         boost::asio::connect(
             socket.next_layer(),

@@ -28,6 +28,7 @@ Database database("database/region2.db");
 std::unordered_map<std::string, double> latestPowerByDevice;
 std::mutex powerMutex;
 std::mutex centralSyncMutex;
+std::string centralServerHost = "127.0.0.1";
 
 // Posljednja tarifa koja je stvarno poslana svakom Smart Meteru.
 // Prvi izracun tarife se salje, a nakon toga TARIFF_UPDATE ide
@@ -1549,11 +1550,10 @@ void connectToCentralServer()
         tcp::resolver resolver(centralIoContext);
 
         auto endpoints =
-            resolver.resolve(
-                "127.0.0.1",
-                "6000"
-            );
-
+    resolver.resolve(
+        centralServerHost,
+        "6000"
+    );
         centralSocket =
             std::make_shared<ssl_socket>(
                 centralIoContext,
@@ -1593,9 +1593,20 @@ void connectToCentralServer()
     }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-connectToCentralServer();
+    if (argc >= 2)
+    {
+        centralServerHost = argv[1];
+    }
+
+    std::cout
+        << "Central Server adresa: "
+        << centralServerHost
+        << ":6000"
+        << std::endl;
+
+    connectToCentralServer();
 if (!database.initialize())
 {
     std::cerr

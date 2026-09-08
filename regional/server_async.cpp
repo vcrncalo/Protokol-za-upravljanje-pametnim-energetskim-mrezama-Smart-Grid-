@@ -28,7 +28,7 @@ std::mutex powerMutex;
 std::mutex centralSyncMutex;
 std::unordered_map<std::string, double> lastTariffByDevice;
 std::mutex tariffMutex;
-
+std::string centralServerHost = "127.0.0.1";
 
 std::string getPeerCertificateUri(ssl_socket& socket)
 {
@@ -1560,10 +1560,10 @@ void connectToCentralServer()
         tcp::resolver resolver(centralIoContext);
 
         auto endpoints =
-            resolver.resolve(
-                "127.0.0.1",
-                "6000"
-            );
+    resolver.resolve(
+        centralServerHost,
+        "6000"
+    );
 
         centralSocket =
             std::make_shared<ssl_socket>(
@@ -1604,8 +1604,19 @@ void connectToCentralServer()
     }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
+    if (argc >= 2)
+    {
+        centralServerHost = argv[1];
+    }
+
+    std::cout
+        << "Central Server adresa: "
+        << centralServerHost
+        << ":6000"
+        << std::endl;
+
     connectToCentralServer();
 if (!database.initialize())
 {
