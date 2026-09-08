@@ -68,6 +68,11 @@ Podaci su serijalizovani u mrežni redoslijed bajtova, a funkcije za serijalizac
 
 **Byte stream** je kontinuirani niz bajta koji se prenosi preko TCP/TLS veze. U ovom projektu poruke se šalju kao serijalizovani bajti, a 4byte zaglavlje omogućava serveru da prepozna tip poruke i dužinu njenog payload-a.
 
+Ovaj način koriste poruke kao što su `REGISTER_REQ`,
+`REGISTER_ACK`, `CONSUMPTION_REPORT`, `CONSUMPTION_ACK`,
+`TARIFF_UPDATE`, `REDUCE_CONSUMPTION_CMD`, `COMMAND_ACK`,
+`REGION_SYNC` i `REGION_SYNC_ACK`.
+
 **Data stream** je aplikacijski tok uzoraka potrošnje predstavljen porukama `DATA_STREAM_SAMPLE`. Smart meter ih šalje kontinuirano, sa URI adresom, vremenom, rednim brojem, potrošnjom i trenutnom snagom; server ih obrađuje bez zasebnog ACK-a za svaki uzorak.
 
 ## Tabela protokolskih poruka
