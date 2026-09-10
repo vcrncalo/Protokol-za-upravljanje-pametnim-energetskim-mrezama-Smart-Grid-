@@ -5,6 +5,27 @@
 
 Opis projekta: dizajn i implementacija protokola za upravljanje pametnim energetskim mrežama, sa centralnim serverom i smart meter uređajima raspoređenim po regijama.
 
+## Check-lista projektnih zahtjeva
+
+Status: `[x]` implementirano, `[~]` djelimično ili potrebno dodatno potvrditi, `[ ]` nije implementirano.
+
+- [x] Protokol je implementiran u jeziku C++ koristeći Boost.Asio.
+- [x] Implementirana je sinhrona komunikacija kroz osnovne TCP primjere (`server_basic` i `client_basic`).
+- [x] Implementirana je asinhrona komunikacija kroz regionalne TLS servere i testnog Smart Meter klijenta.
+- [ ] Multicast razmjena podataka nije implementirana. Komunikacija se trenutno odvija point-to-point putem TCP-a ili UDP-a.
+- [x] Broadcast poruke se ne koriste.
+- [x] Implementiran je byte-stream prenos serijalizovanih poruka preko TCP/TLS veze.
+- [x] Implementiran je data-stream kroz kontinuirane `DATA_STREAM_SAMPLE` poruke.
+- [x] Koriste se TCP i UDP transportni protokoli; UDP je iskorišten za heartbeat komunikaciju.
+- [x] Implementirana je TLS 1.3 komunikacija sa PQC mehanizmima `X25519MLKEM768` i `ML-DSA-44`, uz mTLS certifikate.
+- [~] Testovi su pripremljeni za lokalno Linux/WSL okruženje i postoje snimci testiranja.
+- [x] Dostavljeni su Wireshark `.pcap` snimci mrežnog saobraćaja u direktoriju `../WireShark/`.
+- [x] Dostavljene su funkcionalne test skripte u `tests/` i benchmark testovi u `tests/benchmark/`.
+- [ ] MSC (Message Sequence Chart) dijagrami nisu izrađeni.
+- [x] Osnovni protokol nije zasnovan na HTTP-u, već na vlastitom binarnom protokolu preko TCP/TLS i UDP transporta. `web_monitoring/server.cpp` je zaseban pomoćni HTTP prikaz podataka.
+- [~] README sadrži podatke o Univerzitetu, fakultetu i odsjeku. Javnost repozitorija na platformi za pohranu koda treba potvrditi zasebno.
+- [ ] Video prikaz rada protokola nije pronađen u repozitoriju i treba ga dostaviti zasebno ako je obavezan dio predaje.
+
 ## Funkcionalnosti
 
 - Registracija svakog smart metera pomoću URI-a i digitalnog certifikata.
@@ -111,6 +132,16 @@ Status je bajt koji server ili uređaj koristi da označi uspjeh ili neuspjeh op
 ├── tests/          Funkcionalni testovi sistema
 │   └── benchmark/  Benchmark za mjerenje performansi
 └── web_monitoring/ Jednostavni web server za pregled agregiranih podataka
+```
+
+## WireShark snimci
+
+Direktorij `../WireShark/` sadrži `.pcap` snimke mrežnog saobraćaja prikupljene tokom testiranja Smart Grid sistema. Snimci se mogu otvoriti u programu [Wireshark](https://www.wireshark.org/) radi analize TCP/TLS komunikacije, registracije uređaja, razmjene mjerenja i ponašanja pri neispravnom URI-u. Pošto je saobraćaj zaštićen TLS-om, sadržaj aplikacijskih poruka nije nužno vidljiv bez odgovarajućih ključeva; snimci su korisni i za pregled konekcija, portova, handshake-a i vremenskog toka poruka.
+
+Primjer otvaranja snimka iz glavnog direktorija projekta:
+
+```bash
+wireshark ../WireShark/test_03_invalid_uri.pcap
 ```
 
 ## Podešavanje okruženja za Boost.Asio
@@ -267,6 +298,38 @@ U drugom terminalu pojedinačni test pokreće se ovako:
 | `test_07_data_stream.sh` | Kontinuirano slanje uzoraka | primljena su najmanje tri `DATA_STREAM_SAMPLE` uzorka |
 
 Testovi upisuju detaljan izlaz u `tests/test_0X_output.log`. Vrijeme trajanja zavisi od timeouta u skripti i od toga koliko brzo server odgovara.
+
+## Pokretanje funkcionalnih testova
+
+Testovi se izvršavaju iz glavnog direktorija projekta, u Linuxu ili WSL-u. Prvo treba kompajlirati potrebne programe i omogućiti izvršavanje skripti:
+
+```bash
+g++ -std=c++17 central/sync_server.cpp -o central/sync_server -lboost_system -lssl -lcrypto -lsqlite3 -pthread
+g++ -std=c++17 regional/server_async.cpp -o regional/server_async -lboost_system -lssl -lcrypto -lsqlite3 -pthread
+g++ -std=c++17 regional/server_region2.cpp -o regional/server_region2 -lboost_system -lssl -lcrypto -lsqlite3 -pthread
+g++ -std=c++17 smart_meter/client_async_test.cpp -o smart_meter/client_async_test -lboost_system -lssl -lcrypto -pthread
+chmod +x tests/*.sh
+```
+
+Zatim otvorite tri terminala. U prvom pokrenite centralni server, u drugom regionalni server za Sarajevo, a u trećem regionalni server za Mostar:
+
+```bash
+# Terminal 1
+./central/sync_server
+
+# Terminal 2
+./regional/server_async
+
+# Terminal 3
+./regional/server_region2
+```
+
+Serveri moraju ostati pokrenuti dok se test izvršava. U četvrtom terminalu pokrenite željeni test, na primjer:
+
+```bash
+./tests/test_01_region1_registration.sh
+```
+Testovi `test_01` do `test_07` koriste TLS/PQC klijenta i zato zahtijevaju pokrenute servere, certifikate i OpenSSL podršku za korištene algoritme. Region 1 koristi port `5001`, Region 2 port `5003`, a centralni server port `6000`. Test `test_04_consumption_sync.sh` dodatno zahtijeva postojeću bazu `database/central.db` i instaliran alat `sqlite3`. Detaljni izlazi se čuvaju u datotekama `tests/test_0X_output.log`, a test može biti označen kao neuspješan ako server nije pokrenut, certifikati nisu dostupni ili je odgovarajući port već zauzet.
 
 ## Benchmark testovi
 
