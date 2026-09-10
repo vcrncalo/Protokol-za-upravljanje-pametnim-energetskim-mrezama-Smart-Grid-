@@ -12,7 +12,7 @@ Status: `[x]` implementirano, `[~]` djelimično ili potrebno dodatno potvrditi, 
 - [x] Protokol je implementiran u jeziku C++ koristeći Boost.Asio.
 - [x] Implementirana je sinhrona komunikacija kroz osnovne TCP primjere (`server_basic` i `client_basic`).
 - [x] Implementirana je asinhrona komunikacija kroz regionalne TLS servere i testnog Smart Meter klijenta.
-- [ ] Multicast razmjena podataka nije implementirana. Komunikacija se trenutno odvija point-to-point putem TCP-a ili UDP-a.
+- [x] Multicast razmjena podataka nije implementirana jer nije dozvoljena. Komunikacija se trenutno odvija point-to-point putem TCP-a ili UDP-a.
 - [x] Broadcast poruke se ne koriste.
 - [x] Implementiran je byte-stream prenos serijalizovanih poruka preko TCP/TLS veze.
 - [x] Implementiran je data-stream kroz kontinuirane `DATA_STREAM_SAMPLE` poruke.
@@ -24,7 +24,7 @@ Status: `[x]` implementirano, `[~]` djelimično ili potrebno dodatno potvrditi, 
 - [ ] MSC (Message Sequence Chart) dijagrami nisu izrađeni.
 - [x] Osnovni protokol nije zasnovan na HTTP-u, već na vlastitom binarnom protokolu preko TCP/TLS i UDP transporta. `web_monitoring/server.cpp` je zaseban pomoćni HTTP prikaz podataka.
 - [~] README sadrži podatke o Univerzitetu, fakultetu i odsjeku. Javnost repozitorija na platformi za pohranu koda treba potvrditi zasebno.
-- [ ] Video prikaz rada protokola nije pronađen u repozitoriju i treba ga dostaviti zasebno ako je obavezan dio predaje.
+- [ ] Video prikaz rada protokola nije odrađen
 
 ## Funkcionalnosti
 
